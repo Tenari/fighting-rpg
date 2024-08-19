@@ -1,0 +1,11 @@
+.{
+    .name = "combatrpg_server",
+    .version = "0.0.0",
+    .dependencies = .{
+        .httpz = .{
+            .url = "git+https://github.com/karlseguin/http.zig#master",
+            .hash = "122041ec7419e17de7badb4891830fbeae3c41bf2c960fe987ddab3682dd27782605",
+        },
+    },
+    .paths = .{""},
+}
