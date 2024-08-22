@@ -1,8 +1,9 @@
 const std = @import("std");
-const expect = std.testing.expect;
-const posix = std.posix;
+const lib = @import("lib");
+const Socket = @import("lib").Socket;
 
-var reqno: u2 = 0;
+const fps: i128 = 1;
+const goal_loop_time: i128 = std.time.ns_per_s / fps;
 
 pub fn main() !void {
     // 1. allocate server memory
@@ -12,42 +13,55 @@ pub fn main() !void {
     // requests come in to the server, which saves them as inputs to be read on the next gameloop frame
     // gameloop frames update game state in memeory, periodically (every N frames) saving to disk
 
-    // allocate 3GB of ram for the game state
-    //    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //    const allocator = gpa.allocator();
+    // allocate the game-state
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    var game = try allocator.create(lib.Game);
+    defer allocator.destroy(game);
+    std.debug.print("game memory size: {d}\n", .{@sizeOf(lib.Game)});
+    game.init();
 
+    var inputs = std.ArrayList(Input).init(allocator);
+    defer inputs.deinit();
+
+    // spin off thread for the game-loop
+    const game_thread_handle = try std.Thread.spawn(.{}, gameLoop, .{ &inputs, game });
+    game_thread_handle.detach();
+
+    // start the udp server for setting inputs
     std.debug.print("Starting CombatRPG server...\n", .{});
     var socket = try Socket.init("127.0.0.1", 13370);
     try socket.bind();
-    try socket.listen();
-}
-
-test Socket {
-    const socket = try Socket.init("127.0.0.1", 3000);
-    try expect(@TypeOf(socket.socket) == posix.socket_t);
-}
-const Socket = struct {
-    address: std.net.Address,
-    socket: posix.socket_t,
-
-    fn init(ip: []const u8, port: u16) !Socket {
-        const parsed_address = try std.net.Address.parseIp4(ip, port);
-        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
-        errdefer posix.closeSocket(sock);
-        return Socket{ .address = parsed_address, .socket = sock };
-    }
-
-    fn bind(self: *Socket) !void {
-        try posix.bind(self.socket, &self.address.any, self.address.getOsSockLen());
-    }
-
-    fn listen(self: *Socket) !void {
-        var buffer: [1024]u8 = undefined;
-
-        while (true) {
-            const received_bytes = try posix.recvfrom(self.socket, buffer[0..], 0, null, null);
-            reqno +%= 1;
-            std.debug.print("#{d} Received {d} bytes: {s}\n", .{ reqno, received_bytes, buffer[0..received_bytes] });
+    var buffer: [1024]u8 = undefined;
+    while (true) {
+        const byte_count = try socket.recv(buffer[0..]);
+        std.debug.print("Received {d} bytes: {s}\n", .{ byte_count, buffer[0..byte_count] });
+        if (buffer[0] == 's') {
+            try inputs.append(.{ .msg = lib.Message.sign_up, .data = buffer[0..byte_count] });
         }
     }
+}
+
+fn gameLoop(inputs: *std.ArrayList(Input), game: *lib.Game) void {
+    while (true) {
+        const loop_start = std.time.nanoTimestamp();
+        for (inputs.items) |i| {
+            std.debug.print("known input {any}\n", .{i.msg});
+        }
+        for (game.players) |p| {
+            if (p) |player| {
+                std.debug.print("known player {any}\n", .{player.username});
+            }
+        }
+        const loop_duration = std.time.nanoTimestamp() - loop_start;
+        const remaining_time = goal_loop_time - loop_duration;
+        if (remaining_time > 0) {
+            std.time.sleep(@intCast(remaining_time));
+        }
+    }
+}
+
+pub const Input = struct {
+    msg: lib.Message,
+    data: []u8,
 };
