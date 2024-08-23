@@ -31,8 +31,10 @@ const default64: [64]u8 = [_]u8{0} ** 64;
 pub const Player = struct {
     username: [16]u8 = default,
     pw_hash: [64]u8 = default64,
-    salt: []const u8,
+    salt: u8,
     character: *Character,
+    last_sign_in_at: u128 = 0,
+    allowed_source: std.net.Address,
 };
 
 const MAX_ROOM_SIZE: usize = 256;
@@ -134,7 +136,7 @@ pub const Socket = struct {
 
     pub fn init(ip: []const u8, port: u16) !Socket {
         const parsed_address = try std.net.Address.parseIp4(ip, port);
-        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
+        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
         errdefer posix.close(sock);
         return Socket{ .address = parsed_address, .socket = sock, .closed = false };
     }
@@ -173,9 +175,43 @@ pub const Socket = struct {
         if (self.closed) return error.SocketClosedAlready;
         _ = try posix.send(self.socket, buf, 0);
     }
+
+    pub fn respond(addr: posix.sockaddr, buf: []u8) !void {
+        std.debug.print("responding\n", .{});
+        const addr_len: u32 = @sizeOf(posix.sockaddr);
+        std.debug.print("a\n", .{});
+        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
+        std.debug.print("b\n", .{});
+        try posix.connect(sock, &addr, addr_len);
+        std.debug.print("c\n", .{});
+        _ = try posix.send(sock, buf, 0);
+        std.debug.print("d\n", .{});
+    }
+
+    pub fn receive_response(addr: *posix.sockaddr, buf: []u8) !usize {
+        std.debug.print("receiving\n", .{});
+        const addr_len: u32 = @sizeOf(posix.sockaddr);
+        std.debug.print("a\n", .{});
+        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
+        std.debug.print("b\n", .{});
+        try posix.connect(sock, addr, addr_len);
+        std.debug.print("c\n", .{});
+        const a = try posix.recv(sock, buf, 0);
+        std.debug.print("d\n", .{});
+        return a;
+    }
 };
 
-pub const Message = enum {
+pub const Message = enum(u8) {
+    // server responses
+    pub_key_is,
+    // server-public messages
     sign_up,
+    get_pub_key,
+    update_player_source, // so the server knows the IP/connection-info allowed to control this player. must provide player_id and `proof` of ownership of that id. This is essentially our 'sign in' message
+    // server-player-whitelist messages (only allowed to come from proven owners of a player)
+    get_local_state, // asking for current state "around" the player for client to render
+    create_character,
     move,
+    clear_player_source, // server "signs out" the player
 };
