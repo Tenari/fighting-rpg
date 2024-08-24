@@ -22,26 +22,16 @@ pub fn main() !void {
 
     // connection setup
     std.debug.print("Starting CombatRPG client...\n", .{});
-
-    var addr_len: u32 = @sizeOf(posix.sockaddr);
-    var server_address = try std.net.Address.parseIp4("127.0.0.1", 13370);
+    var server_address = try std.net.Address.parseIp4(lib.DEFAULT_SERVER_HOST, lib.DEFAULT_SERVER_PORT);
     const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
     errdefer posix.close(sock);
-    const get_pub_key_bytes = [_]u8{@intFromEnum(Message.get_pub_key)};
-    _ = try posix.sendto(sock, get_pub_key_bytes[0..], 0, &server_address.any, server_address.getOsSockLen());
-    var buffer: [1024]u8 = undefined;
-    const byte_count = try posix.recvfrom(sock, buffer[0..], 0, &server_address.any, &addr_len);
-    std.debug.print("Received {d} bytes: {any}\n", .{ byte_count, buffer[0..byte_count] });
-    //var socket = try Socket.init("127.0.0.1", 13370);
-    //defer socket.deinit();
-    //try socket.connect();
+
     // get server public-key
-    //const get_pub_key_bytes = [_]u8{@intFromEnum(Message.get_pub_key)};
-    //try socket.send(&get_pub_key_bytes);
-    //var buffer: [1024]u8 = undefined;
-    //const read_byte_count = try Socket.receive_response(&socket.address.any, buffer[0..]);
-    //std.debug.print("Received {d} bytes: {s}\n", .{ read_byte_count, buffer[0..read_byte_count] });
-    //try createGui(&sock);
+    const pk_response = try lib.request_response(.{ .msg = Message.get_pub_key, .data = &.{} }, sock, &server_address);
+    std.debug.assert(pk_response.msg == Message.pub_key_is);
+    const public_key = try std.crypto.sign.ecdsa.EcdsaP256Sha256.PublicKey.fromSec1(pk_response.data);
+    std.debug.print("server public_key: {any}\n", .{public_key.toCompressedSec1()});
+
     try createGui();
 }
 

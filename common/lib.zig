@@ -2,6 +2,9 @@ const std = @import("std");
 const posix = std.posix;
 const expect = std.testing.expect;
 
+pub const DEFAULT_SERVER_HOST = "127.0.0.1";
+pub const DEFAULT_SERVER_PORT = 31173;
+
 const MAX_PLAYERS: usize = 16;
 const MAX_ROOMS: usize = 8;
 const MAX_ITEMS: usize = 2048 * 2;
@@ -146,6 +149,17 @@ pub const Socket = struct {
         posix.close(self.socket);
     }
 
+    pub fn startServer(self: *Socket) !void {
+        try posix.bind(self.socket, &self.address.any, self.address.getOsSockLen());
+        var request_buffer: [1024]u8 = undefined;
+        var request_source_address: posix.sockaddr = undefined;
+        var addr_len: u32 = @sizeOf(posix.sockaddr);
+        while (true) {
+            const byte_count = try posix.recvfrom(self.socket, request_buffer[0..], 0, &request_source_address, &addr_len);
+            std.debug.print("Received {d} bytes: {s}\n", .{ byte_count, request_buffer[0..byte_count] });
+        }
+    }
+
     pub fn bind(self: *Socket) !void {
         if (self.closed) return error.SocketClosedAlready;
         try posix.bind(self.socket, &self.address.any, self.address.getOsSockLen());
@@ -200,6 +214,29 @@ pub const Socket = struct {
         std.debug.print("d\n", .{});
         return a;
     }
+};
+
+/// send an Input to the server, and receive an Input back
+pub fn request_response(input: Input, s: posix.socket_t, addr: *std.net.Address) !Input {
+    // make the message as array of bytes
+    var buffer: [1024]u8 = undefined;
+    buffer[0] = @intFromEnum(input.msg);
+    const input_buf_len = input.data.len + 1;
+    if (input.data.len > 0) {
+        @memcpy(buffer[1..input_buf_len], input.data);
+    }
+    // send it
+    var addr_len = addr.getOsSockLen();
+    _ = try posix.sendto(s, buffer[0..input_buf_len], 0, &addr.*.any, addr_len);
+    // get response (overwriting buffer)
+    const byte_count = try posix.recvfrom(s, buffer[0..], 0, &addr.*.any, &addr_len);
+    const msg_type: Message = @enumFromInt(buffer[0]);
+    return .{ .msg = msg_type, .data = buffer[1..byte_count] };
+}
+
+pub const Input = struct {
+    msg: Message,
+    data: []u8,
 };
 
 pub const Message = enum(u8) {
