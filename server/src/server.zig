@@ -4,7 +4,6 @@ const lib = @import("lib");
 const Input = lib.Input;
 const Game = lib.Game;
 const Message = lib.Message;
-const Socket = lib.Socket;
 
 const fps: i128 = 1;
 const goal_loop_time: i128 = std.time.ns_per_s / fps;
@@ -54,6 +53,15 @@ pub fn main() !void {
         switch (msg) {
             .get_pub_key => {
                 std.debug.print(".get_pub_key {any}\n", .{request_source_address});
+                buffer[0] = @intFromEnum(Message.pub_key_is);
+                const buffer_slice_end = (public_key.len + 1);
+                @memcpy(buffer[1..buffer_slice_end], &public_key);
+                const bytes_sent = try posix.sendto(socket, buffer[0..buffer_slice_end], 0, &request_source_address, addr_len);
+                std.debug.print("bytes_sent {d}\n", .{bytes_sent});
+            },
+            .get_local_state => {
+                // TODO: actually return the game state for the character
+                std.debug.print(".get_local_state {any}\n", .{request_source_address});
                 buffer[0] = @intFromEnum(Message.pub_key_is);
                 const buffer_slice_end = (public_key.len + 1);
                 @memcpy(buffer[1..buffer_slice_end], &public_key);

@@ -12,12 +12,13 @@ pub fn build(b: *std.Build) void {
     }
     const exe = b.addExecutable(.{
         .name = name,
-        .root_source_file = if (server) b.path("server/src/server.zig") else b.path("client/src/client.zig"),
+        .root_source_file = if (server) b.path("server/src/server.zig") else b.path("client/src/platform.zig"),
         .target = target,
         .optimize = optimize,
     });
     if (!server) {
         exe.linkSystemLibrary("SDL2");
+        exe.linkSystemLibrary("SDL2_image");
         exe.linkLibC();
     }
 

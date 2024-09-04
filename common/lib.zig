@@ -20,8 +20,9 @@ pub const Game = struct {
             self.characters[i] = null;
         }
         for (0..MAX_ROOMS) |i| {
-            self.map[i] = Room.default();
+            self.map[i] = Room.default(i);
         }
+        self.map[0].setTilesFromBytes(@embedFile("map.txt"));
         for (0..MAX_ITEMS) |i| {
             self.items[i] = null;
         }
@@ -41,37 +42,57 @@ pub const Player = struct {
 };
 
 const MAX_ROOM_SIZE: usize = 256;
+pub const RoomId = usize;
 pub const Room = struct {
+    id: RoomId,
     tiles: [MAX_ROOM_SIZE]Tile,
     height: usize,
     width: usize,
 
-    pub fn default() Room {
+    pub fn default(id: RoomId) Room {
         return .{
-            .tiles = [_]Tile{Tile.default()} ** MAX_ROOM_SIZE,
+            .id = id,
+            .tiles = [_]Tile{Tile.default(id)} ** MAX_ROOM_SIZE,
             .height = 0,
             .width = 0,
         };
+    }
+
+    pub fn setTilesFromBytes(self: Room, bytes: []u8) Room {
+        var i: usize = 0;
+        for (bytes) |byte| {
+            switch (byte) {
+                119 => { // w = wall
+                    self.tiles[i].terrain = Terrain.wall;
+                    i += 1;
+                },
+                10 => { // newline
+                    // intentionally don't update `i` here
+                },
+                else => {
+                    i += 1;
+                },
+            }
+        }
+    }
+
+    pub fn get(self: Room, location: Location) *Tile {
+        const access = (location.y * self.width) + location.x;
+        return &self.tiles[access];
     }
 };
 
 const MAX_ITEMS_PER_TILE = 256;
 const MAX_CHARACTERS_PER_TILE = 4;
 pub const Tile = struct {
-    parent: ?*Room,
+    parent_id: RoomId,
     terrain: Terrain,
-    items: [MAX_ITEMS_PER_TILE]?*Item,
-    characters: [MAX_CHARACTERS_PER_TILE]?*Character,
-    npc: ?*Npc,
     connect: ?*Tile, // when a character/NPC steps on this tile, they are auto-warped to the other tile, for things like doors
 
-    fn default() Tile {
+    fn default(id: RoomId) Tile {
         return .{
-            .parent = null,
+            .parent_id = id,
             .terrain = Terrain.blank,
-            .items = [_]?*Item{null} ** MAX_ITEMS_PER_TILE,
-            .characters = [_]?*Character{null} ** MAX_CHARACTERS_PER_TILE,
-            .npc = null,
             .connect = null,
         };
     }
@@ -86,7 +107,7 @@ pub const ItemClass = enum { weapon, material, qistal };
 
 pub const Npc = enum { squirrel, wolf, bear, teacher };
 
-pub const Terrain = enum { blank, dirt, grass1, grass2, grass3, grass4, path_north, sand, water, exit };
+pub const Terrain = enum { blank, dirt, grass1, grass2, grass3, grass4, path_north, sand, water, exit, wall };
 
 pub const Realm = enum { earthly, metallic, precious, heavenly };
 pub const EarthlyStage = enum { dirt, clay, wood, stone };
@@ -113,106 +134,24 @@ pub const Stage = enum {
 };
 pub const Race = enum { human, rat, ox, tiger, rabbit, dragon, snake, horse, sheep, monkey, rooster, dog, pig };
 
+pub const Location = struct {
+    x: u32,
+    y: u32,
+    room: RoomId,
+};
 pub const Character = struct {
     name: []const u8 = "",
     race: Race,
     realm: Realm = Realm.earthly,
     stage: Stage = Stage.earthly_dirt,
     level: u2 = 0,
+    location: Location,
 
     pub fn init(name: []const u8, race: Race) Character {
         return Character{
             .name = name,
             .race = race,
         };
-    }
-};
-
-test Socket {
-    const socket = try Socket.init("127.0.0.1", 3000);
-    try expect(@TypeOf(socket.socket) == posix.socket_t);
-}
-pub const Socket = struct {
-    address: std.net.Address,
-    socket: posix.socket_t,
-    closed: bool,
-
-    pub fn init(ip: []const u8, port: u16) !Socket {
-        const parsed_address = try std.net.Address.parseIp4(ip, port);
-        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
-        errdefer posix.close(sock);
-        return Socket{ .address = parsed_address, .socket = sock, .closed = false };
-    }
-
-    pub fn deinit(self: *Socket) void {
-        self.closed = true;
-        posix.close(self.socket);
-    }
-
-    pub fn startServer(self: *Socket) !void {
-        try posix.bind(self.socket, &self.address.any, self.address.getOsSockLen());
-        var request_buffer: [1024]u8 = undefined;
-        var request_source_address: posix.sockaddr = undefined;
-        var addr_len: u32 = @sizeOf(posix.sockaddr);
-        while (true) {
-            const byte_count = try posix.recvfrom(self.socket, request_buffer[0..], 0, &request_source_address, &addr_len);
-            std.debug.print("Received {d} bytes: {s}\n", .{ byte_count, request_buffer[0..byte_count] });
-        }
-    }
-
-    pub fn bind(self: *Socket) !void {
-        if (self.closed) return error.SocketClosedAlready;
-        try posix.bind(self.socket, &self.address.any, self.address.getOsSockLen());
-    }
-
-    pub fn recv(self: *Socket, buf: []u8) !usize {
-        if (self.closed) return error.SocketClosedAlready;
-        return try posix.recvfrom(self.socket, buf, 0, null, null);
-    }
-
-    pub fn listen(self: *Socket) !void {
-        if (self.closed) return error.SocketClosedAlready;
-        var buffer: [1024]u8 = undefined;
-
-        while (true) {
-            const received_bytes = try posix.recvfrom(self.socket, buffer[0..], 0, null, null);
-            std.debug.print("Received {d} bytes: {s}\n", .{ received_bytes, buffer[0..received_bytes] });
-        }
-    }
-
-    pub fn connect(self: *Socket) !void {
-        if (self.closed) return error.SocketClosedAlready;
-        try posix.connect(self.socket, &self.address.any, self.address.getOsSockLen());
-    }
-
-    pub fn send(self: *Socket, buf: []const u8) !void {
-        if (self.closed) return error.SocketClosedAlready;
-        _ = try posix.send(self.socket, buf, 0);
-    }
-
-    pub fn respond(addr: posix.sockaddr, buf: []u8) !void {
-        std.debug.print("responding\n", .{});
-        const addr_len: u32 = @sizeOf(posix.sockaddr);
-        std.debug.print("a\n", .{});
-        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
-        std.debug.print("b\n", .{});
-        try posix.connect(sock, &addr, addr_len);
-        std.debug.print("c\n", .{});
-        _ = try posix.send(sock, buf, 0);
-        std.debug.print("d\n", .{});
-    }
-
-    pub fn receive_response(addr: *posix.sockaddr, buf: []u8) !usize {
-        std.debug.print("receiving\n", .{});
-        const addr_len: u32 = @sizeOf(posix.sockaddr);
-        std.debug.print("a\n", .{});
-        const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
-        std.debug.print("b\n", .{});
-        try posix.connect(sock, addr, addr_len);
-        std.debug.print("c\n", .{});
-        const a = try posix.recv(sock, buf, 0);
-        std.debug.print("d\n", .{});
-        return a;
     }
 };
 
