@@ -20,7 +20,7 @@ pub const Game = struct {
             self.characters[i] = null;
         }
         for (0..MAX_ROOMS) |i| {
-            self.map[i] = Room.default(i);
+            self.map[i] = Room.default(@intCast(i));
         }
         self.map[0].setTilesFromBytes(@embedFile("map.txt"));
         for (0..MAX_ITEMS) |i| {
@@ -41,13 +41,13 @@ pub const Player = struct {
     allowed_source: std.net.Address,
 };
 
-const MAX_ROOM_SIZE: usize = 256;
-pub const RoomId = usize;
+const MAX_ROOM_SIZE: usize = 32 * 32;
+pub const RoomId = u32;
 pub const Room = struct {
     id: RoomId,
     tiles: [MAX_ROOM_SIZE]Tile,
-    height: usize,
-    width: usize,
+    height: u32,
+    width: u32,
 
     pub fn default(id: RoomId) Room {
         return .{
@@ -58,16 +58,28 @@ pub const Room = struct {
         };
     }
 
-    pub fn setTilesFromBytes(self: Room, bytes: []u8) Room {
-        var i: usize = 0;
+    pub fn setTilesFromBytes(self: *Room, bytes: []const u8) void {
+        var i: u32 = 0;
         for (bytes) |byte| {
+            std.debug.print("{d}", .{byte});
             switch (byte) {
                 119 => { // w = wall
+                    self.tiles[i].index = i;
                     self.tiles[i].terrain = Terrain.wall;
+                    i += 1;
+                },
+                32 => { // space = dirt
+                    self.tiles[i].index = i;
+                    self.tiles[i].terrain = Terrain.dirt;
                     i += 1;
                 },
                 10 => { // newline
                     // intentionally don't update `i` here
+                    std.debug.print("\n", .{});
+                    if (self.width == 0) {
+                        self.width = i;
+                    }
+                    self.height += 1;
                 },
                 else => {
                     i += 1;
@@ -76,9 +88,36 @@ pub const Room = struct {
         }
     }
 
-    pub fn get(self: Room, location: Location) *Tile {
+    pub fn get(self: *Room, location: Location) *Tile {
         const access = (location.y * self.width) + location.x;
         return &self.tiles[access];
+    }
+
+    pub fn toBytes(self: *Room) []u8 {
+        var id_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &id_bytes, self.id, std.builtin.Endian.little);
+        var height: [4]u8 = undefined;
+        std.mem.writeInt(u32, &height, self.height, std.builtin.Endian.little);
+        var width: [4]u8 = undefined;
+        std.mem.writeInt(u32, &width, self.width, std.builtin.Endian.little);
+        var tile_bytes: [MAX_ROOM_SIZE]u8 = undefined;
+        var last_valid_tile: usize = 0;
+        for (&self.tiles, 0..) |*tile, i| {
+            tile_bytes[i] = tile.asByte();
+            if (tile.terrain != Terrain.blank) {
+                last_valid_tile = i;
+            }
+        }
+
+        const hilen = id_bytes.len + height.len;
+        const wilen = hilen + width.len;
+        const finalen = wilen + last_valid_tile;
+        var bytes: [wilen + MAX_ROOM_SIZE]u8 = undefined;
+        @memcpy(bytes[0..id_bytes.len], id_bytes[0..]);
+        @memcpy(bytes[id_bytes.len..hilen], height[0..]);
+        @memcpy(bytes[hilen..wilen], width[0..]);
+        @memcpy(bytes[wilen..finalen], tile_bytes[0..last_valid_tile]);
+        return bytes[0..finalen];
     }
 };
 
@@ -86,15 +125,31 @@ const MAX_ITEMS_PER_TILE = 256;
 const MAX_CHARACTERS_PER_TILE = 4;
 pub const Tile = struct {
     parent_id: RoomId,
+    index: u32,
     terrain: Terrain,
-    connect: ?*Tile, // when a character/NPC steps on this tile, they are auto-warped to the other tile, for things like doors
+    connect: ?u32, // when a character/NPC steps on this tile, they are auto-warped to the other tile, for things like doors
 
     fn default(id: RoomId) Tile {
         return .{
             .parent_id = id,
+            .index = 0,
             .terrain = Terrain.blank,
             .connect = null,
         };
+    }
+
+    pub fn asByte(self: *Tile) u8 {
+        switch (self.terrain) {
+            .wall => {
+                return 119;
+            },
+            .dirt => {
+                return 32;
+            },
+            else => {
+                return 0;
+            },
+        }
     }
 };
 
@@ -137,7 +192,7 @@ pub const Race = enum { human, rat, ox, tiger, rabbit, dragon, snake, horse, she
 pub const Location = struct {
     x: u32,
     y: u32,
-    room: RoomId,
+    room: RoomId = 0,
 };
 pub const Character = struct {
     name: []const u8 = "",
@@ -158,7 +213,7 @@ pub const Character = struct {
 /// send an Input to the server, and receive an Input back
 pub fn request_response(input: Input, s: posix.socket_t, addr: *std.net.Address) !Input {
     // make the message as array of bytes
-    var buffer: [1024]u8 = undefined;
+    var buffer: [1024 * 32]u8 = undefined;
     buffer[0] = @intFromEnum(input.msg);
     const input_buf_len = input.data.len + 1;
     if (input.data.len > 0) {
@@ -181,6 +236,7 @@ pub const Input = struct {
 pub const Message = enum(u8) {
     // server responses
     pub_key_is,
+    state_is,
     // server-public messages
     sign_up,
     get_pub_key,

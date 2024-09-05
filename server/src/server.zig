@@ -3,6 +3,7 @@ const posix = std.posix;
 const lib = @import("lib");
 const Input = lib.Input;
 const Game = lib.Game;
+const Room = lib.Room;
 const Message = lib.Message;
 
 const fps: i128 = 1;
@@ -40,7 +41,7 @@ pub fn main() !void {
     const server_address = try std.net.Address.parseIp4(lib.DEFAULT_SERVER_HOST, lib.DEFAULT_SERVER_PORT);
     const socket = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
     try posix.bind(socket, &server_address.any, server_address.getOsSockLen());
-    var buffer: [1024]u8 = undefined;
+    var buffer: [1024 * 32]u8 = undefined;
     var request_source_address: posix.sockaddr = undefined;
     var addr_len: u32 = @sizeOf(posix.sockaddr);
     while (true) {
@@ -62,11 +63,12 @@ pub fn main() !void {
             .get_local_state => {
                 // TODO: actually return the game state for the character
                 std.debug.print(".get_local_state {any}\n", .{request_source_address});
-                buffer[0] = @intFromEnum(Message.pub_key_is);
-                const buffer_slice_end = (public_key.len + 1);
-                @memcpy(buffer[1..buffer_slice_end], &public_key);
+                buffer[0] = @intFromEnum(Message.state_is);
+                const bytes_to_send = game.map[0].toBytes();
+                const buffer_slice_end = (bytes_to_send.len + 1);
+                @memcpy(buffer[1..buffer_slice_end], bytes_to_send[0..]);
                 const bytes_sent = try posix.sendto(socket, buffer[0..buffer_slice_end], 0, &request_source_address, addr_len);
-                std.debug.print("bytes_sent {d}\n", .{bytes_sent});
+                std.debug.print("bytes_sent {d}\n{any}\n", .{ bytes_sent, buffer[0..buffer_slice_end] });
             },
             // assume anything else is player-input affecting game-state in a real-time manner
             else => {

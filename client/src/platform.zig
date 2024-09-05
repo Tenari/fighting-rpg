@@ -43,6 +43,17 @@ pub fn main() !void {
     const public_key = try std.crypto.sign.ecdsa.EcdsaP256Sha256.PublicKey.fromSec1(pk_response.data);
     std.debug.print("server public_key: {any}\n", .{public_key.toCompressedSec1()});
 
+    // get current room from the server
+    const state_response = try lib.request_response(.{ .msg = Message.get_local_state, .data = &.{} }, sock, &server_address);
+    std.debug.print("server room state response:\n{any}\n", .{state_response});
+    std.debug.assert(state_response.msg == Message.state_is);
+    var server_state: lib.Room = lib.Room.default(0);
+    server_state.id = std.mem.readInt(u32, state_response.data[0..4], std.builtin.Endian.little);
+    server_state.height = std.mem.readInt(u32, state_response.data[4..8], std.builtin.Endian.little);
+    server_state.width = std.mem.readInt(u32, state_response.data[8..12], std.builtin.Endian.little);
+    server_state.setTilesFromBytes(state_response.data[12..]);
+    std.debug.print("server room state: {any}\n", .{server_state});
+
     // see if the save file exists
     const maybe_file: ?std.fs.File = std.fs.cwd().openFile("save.json", .{}) catch null;
     if (maybe_file) |file| {
@@ -101,9 +112,7 @@ pub fn main() !void {
     var input_history: [64]types.AllInputSnapshot = undefined;
     var frame: u64 = 0;
     var quit = false;
-    // TODO: actually get the server state
-    var server_state: lib.Game = undefined;
-    const state: *types.ClientState = try game.initClientState(allocator, &server_state, renderer);
+    const state: *types.ClientState = try game.initClientState(allocator, server_state, renderer);
     while (!quit) {
         const current_input: *types.AllInputSnapshot = &input_history[frame % input_history.len];
         current_input.*.controllers[0].direction = .{ .x = -0.0, .y = 0.0 };

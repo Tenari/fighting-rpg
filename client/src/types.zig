@@ -1,10 +1,13 @@
 const c = @cImport({
     @cInclude("SDL2/SDL_image.h");
 });
+const lib = @import("lib");
+
 pub const TILE_SIZE = 32;
 pub const ClientState = struct {
     player: Entity,
     in_combat: bool,
+    room: lib.Room,
 };
 pub const Entity = struct {
     location: WorldLocation,
@@ -29,8 +32,8 @@ pub const WorldLocation = struct {
     pub fn default() WorldLocation {
         return .{
             .room_id = 0,
-            .x = 0,
-            .y = 0,
+            .x = 1,
+            .y = 1,
         };
     }
 };
