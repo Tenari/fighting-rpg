@@ -1,9 +1,7 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("SDL2/SDL_image.h");
-});
 const lib = @import("lib");
 const types = @import("types.zig");
+const c = types.c;
 const Entity = types.Entity;
 const ClientState = types.ClientState;
 

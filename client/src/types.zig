@@ -1,5 +1,6 @@
-const c = @cImport({
-    @cInclude("SDL2/SDL_image.h");
+pub const c = @cImport({
+    //@cInclude("SDL2/SDL_image.h");
+    @cInclude("SDL2/SDL_custom.h");
 });
 const lib = @import("lib");
 

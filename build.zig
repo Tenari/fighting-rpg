@@ -17,8 +17,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     if (!server) {
+        // see https://dev.to/fabioarnold/setup-zig-for-gamedev-2bmf
         exe.linkSystemLibrary("SDL2");
         exe.linkSystemLibrary("SDL2_image");
+        exe.linkSystemLibrary("SDL2_ttf");
         exe.linkLibC();
     }
 

@@ -3,11 +3,9 @@ const posix = std.posix;
 const assert = std.debug.assert;
 const lib = @import("lib");
 const Message = lib.Message;
-const c = @cImport({
-    @cInclude("SDL2/SDL_image.h");
-});
 const game = @import("game.zig");
 const types = @import("types.zig");
+const c = types.c;
 
 const SCREEN_WIDTH = 1280;
 const SCREEN_HEIGHT = 720;
@@ -54,22 +52,6 @@ pub fn main() !void {
     server_state.setTilesFromBytes(state_response.data[12..]);
     std.debug.print("server room state: {any}\n", .{server_state});
 
-    // see if the save file exists
-    const maybe_file: ?std.fs.File = std.fs.cwd().openFile("save.json", .{}) catch null;
-    if (maybe_file) |file| {
-        defer file.close();
-        var file_buffer: [1024]u8 = undefined;
-        const file_read_size = try file.readAll(file_buffer[0..]);
-        _ = file_read_size;
-        const parsed = try std.json.parseFromSlice(SaveFile, allocator, file_buffer[0..], .{ .allocate = .alloc_always });
-        defer parsed.deinit();
-        const save_file = parsed.value;
-        //TODO: request password from user to prove ownership. this is just to make the compiler happy currently
-        _ = save_file;
-    } else {
-        //TODO: show signup form
-    }
-
     // prep the gui
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         c.SDL_Log("Unable to initialize SDL: %s", c.SDL_GetError());
@@ -90,24 +72,64 @@ pub fn main() !void {
     defer c.SDL_DestroyRenderer(renderer);
 
     _ = c.IMG_Init(c.IMG_INIT_PNG | c.IMG_INIT_JPG);
-    // const zig_bmp = @embedFile("zig.bmp");
-    // const rw = c.SDL_RWFromConstMem(zig_bmp, zig_bmp.len) orelse {
-    //     c.SDL_Log("Unable to get RWFromConstMem: %s", c.SDL_GetError());
-    //     return error.SDLInitializationFailed;
-    // };
-    // defer assert(c.SDL_RWclose(rw) == 0);
+    _ = c.TTF_Init();
 
-    // const zig_surface = c.SDL_LoadBMP_RW(rw, 0) orelse {
-    //     c.SDL_Log("Unable to load bmp: %s", c.SDL_GetError());
-    //     return error.SDLInitializationFailed;
-    // };
-    // defer c.SDL_FreeSurface(zig_surface);
-
-    // const zig_texture = c.SDL_CreateTextureFromSurface(renderer, zig_surface) orelse {
-    //     c.SDL_Log("Unable to create texture from surface: %s", c.SDL_GetError());
-    //     return error.SDLInitializationFailed;
-    // };
-    // defer c.SDL_DestroyTexture(zig_texture);
+    // see if the save file exists
+    const maybe_file: ?std.fs.File = std.fs.cwd().openFile("save.json", .{}) catch null;
+    if (maybe_file) |file| {
+        defer file.close();
+        var file_buffer: [1024]u8 = undefined;
+        const file_read_size = try file.readAll(file_buffer[0..]);
+        _ = file_read_size;
+        const parsed = try std.json.parseFromSlice(SaveFile, allocator, file_buffer[0..], .{ .allocate = .alloc_always });
+        defer parsed.deinit();
+        const save_file = parsed.value;
+        //TODO: request password from user to prove ownership. this is just to make the compiler happy currently
+        _ = save_file;
+    } else {
+        //TODO: show signup form
+        //const signup_response = try lib.request_response(.{ .msg = Message.sign_up, .data = &.{} }, sock, &server_address);
+        //std.debug.assert(signup_response.msg == Message.pub_key_is);
+        const font = c.TTF_OpenFont("/Users/tenari/code/combatrpg/client/assets/lazy.ttf", 28) orelse {
+            std.debug.print("error {s}", .{c.TTF_GetError()});
+            return error.TTFOpenFontError;
+        };
+        std.debug.print("font {any}\n", .{font});
+        var font_color: c.SDL_Color = undefined;
+        font_color.r = 0;
+        font_color.g = 0;
+        font_color.b = 0;
+        const text_surface = c.TTF_RenderText_Solid(font, "The quick brown fox jumps over the lazy dog", font_color) orelse {
+            std.debug.print("error {s}", .{c.TTF_GetError()});
+            return error.TTFOpenFontError;
+        };
+        defer c.SDL_FreeSurface(text_surface);
+        const text_texture = c.SDL_CreateTextureFromSurface(renderer, text_surface) orelse {
+            std.debug.print("error {s}", .{c.TTF_GetError()});
+            return error.TTFOpenFontError;
+        };
+        var dest: c.SDL_Rect = undefined;
+        dest.w = 500;
+        dest.h = 28;
+        dest.x = 50;
+        dest.y = 50;
+        var quit = false;
+        while (!quit) {
+            var event: c.SDL_Event = undefined;
+            while (c.SDL_PollEvent(&event) != 0) {
+                switch (event.type) {
+                    c.SDL_QUIT => {
+                        quit = true;
+                    },
+                    else => {},
+                }
+            }
+            _ = c.SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
+            _ = c.SDL_RenderClear(renderer);
+            _ = c.SDL_RenderCopyEx(renderer, text_texture, null, &dest, 0.0, null, c.SDL_FLIP_NONE);
+            c.SDL_RenderPresent(renderer);
+        }
+    }
 
     var input_history: [64]types.AllInputSnapshot = undefined;
     var frame: u64 = 0;
@@ -140,6 +162,9 @@ pub fn main() !void {
                         },
                         else => {},
                     }
+                },
+                c.SDL_TEXTINPUT => {
+                    std.debug.print("got textinput event: {any}\n", .{event.text.text});
                 },
                 else => {},
             }
