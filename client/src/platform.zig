@@ -64,15 +64,17 @@ pub fn main() !void {
         return error.SDLInitializationFailed;
     };
     defer c.SDL_DestroyWindow(screen);
-
     const renderer = c.SDL_CreateRenderer(screen, -1, 0) orelse {
         c.SDL_Log("Unable to create renderer: %s", c.SDL_GetError());
         return error.SDLInitializationFailed;
     };
     defer c.SDL_DestroyRenderer(renderer);
-
     _ = c.IMG_Init(c.IMG_INIT_PNG | c.IMG_INIT_JPG);
     _ = c.TTF_Init();
+    c.SDL_StartTextInput();
+
+    // init the client game state
+    const state: *types.ClientState = try game.initClientState(allocator, server_state, renderer);
 
     // see if the save file exists
     const maybe_file: ?std.fs.File = std.fs.cwd().openFile("save.json", .{}) catch null;
@@ -90,51 +92,13 @@ pub fn main() !void {
         //TODO: show signup form
         //const signup_response = try lib.request_response(.{ .msg = Message.sign_up, .data = &.{} }, sock, &server_address);
         //std.debug.assert(signup_response.msg == Message.pub_key_is);
-        const font = c.TTF_OpenFont("/Users/tenari/code/combatrpg/client/assets/lazy.ttf", 28) orelse {
-            std.debug.print("error {s}", .{c.TTF_GetError()});
-            return error.TTFOpenFontError;
-        };
-        std.debug.print("font {any}\n", .{font});
-        var font_color: c.SDL_Color = undefined;
-        font_color.r = 0;
-        font_color.g = 0;
-        font_color.b = 0;
-        const text_surface = c.TTF_RenderText_Solid(font, "The quick brown fox jumps over the lazy dog", font_color) orelse {
-            std.debug.print("error {s}", .{c.TTF_GetError()});
-            return error.TTFOpenFontError;
-        };
-        defer c.SDL_FreeSurface(text_surface);
-        const text_texture = c.SDL_CreateTextureFromSurface(renderer, text_surface) orelse {
-            std.debug.print("error {s}", .{c.TTF_GetError()});
-            return error.TTFOpenFontError;
-        };
-        var dest: c.SDL_Rect = undefined;
-        dest.w = 500;
-        dest.h = 28;
-        dest.x = 50;
-        dest.y = 50;
-        var quit = false;
-        while (!quit) {
-            var event: c.SDL_Event = undefined;
-            while (c.SDL_PollEvent(&event) != 0) {
-                switch (event.type) {
-                    c.SDL_QUIT => {
-                        quit = true;
-                    },
-                    else => {},
-                }
-            }
-            _ = c.SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
-            _ = c.SDL_RenderClear(renderer);
-            _ = c.SDL_RenderCopyEx(renderer, text_texture, null, &dest, 0.0, null, c.SDL_FLIP_NONE);
-            c.SDL_RenderPresent(renderer);
-        }
+
+        state.making_new_character = true;
     }
 
     var input_history: [64]types.AllInputSnapshot = undefined;
     var frame: u64 = 0;
     var quit = false;
-    const state: *types.ClientState = try game.initClientState(allocator, server_state, renderer);
     while (!quit) {
         const current_input: *types.AllInputSnapshot = &input_history[frame % input_history.len];
         current_input.*.controllers[0].direction = .{ .x = -0.0, .y = 0.0 };
@@ -147,6 +111,7 @@ pub fn main() !void {
                 c.SDL_KEYDOWN => {
                     std.debug.print("{any}\n", .{event.key});
                     current_input.*.controllers[0].key = event.key.keysym.sym;
+
                     switch (event.key.keysym.sym) {
                         97 => { // a
                             current_input.*.controllers[0].direction.x = -1.0;
@@ -160,11 +125,44 @@ pub fn main() !void {
                         115 => { // s
                             current_input.*.controllers[0].direction.y = 1.0;
                         },
+                        10, 13 => { // return
+                            std.debug.print("matched return\n", .{});
+                            state.making_new_character = false;
+                            //TODO: tell server that we're a new character named state.input_username
+                        },
+                        8 => { // backspace
+                            std.debug.print("handling backspace {s}\n", .{state.input_username});
+                            if (state.making_new_character and state.input_username[0] != 0) {
+                                for (state.input_username, 0..) |byte, i| {
+                                    if (byte == 0) {
+                                        state.input_username[i - 1] = 0;
+                                        state.need_to_update_name_text_texture = true;
+                                        break;
+                                    } else if (i == state.input_username.len - 1) {
+                                        state.input_username[i] = 0;
+                                        state.need_to_update_name_text_texture = true;
+                                    }
+                                }
+                            }
+                        },
                         else => {},
                     }
                 },
                 c.SDL_TEXTINPUT => {
                     std.debug.print("got textinput event: {any}\n", .{event.text.text});
+                    for (state.input_username, 0..) |byte, i| {
+                        if (byte == 0) {
+                            for (event.text.text, 0..) |b, j| {
+                                if (b != 0) {
+                                    state.input_username[i + j] = b;
+                                } else {
+                                    break;
+                                }
+                            }
+                            state.need_to_update_name_text_texture = true;
+                            break;
+                        }
+                    }
                 },
                 else => {},
             }

@@ -6,9 +6,15 @@ const lib = @import("lib");
 
 pub const TILE_SIZE = 32;
 pub const ClientState = struct {
+    input_username: [64]u8 = [_]u8{0} ** 64,
+    making_new_character: bool = false,
     player: Entity,
-    in_combat: bool,
+    in_combat: bool = false,
     room: lib.Room,
+    font: *c.TTF_Font,
+    prompt_text_texture: ?*c.SDL_Texture,
+    need_to_update_name_text_texture: bool,
+    name_text_texture: ?*c.SDL_Texture,
 };
 pub const Entity = struct {
     location: WorldLocation,
