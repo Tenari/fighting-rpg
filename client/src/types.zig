@@ -4,6 +4,16 @@ pub const c = @cImport({
 });
 const lib = @import("lib");
 
+pub const RenderableText = struct {
+    texture: ?*c.SDL_Texture,
+    width: c_int,
+    height: c_int,
+
+    pub fn default() RenderableText {
+        return .{ .texture = null, .width = 0, .height = 0 };
+    }
+};
+
 pub const TILE_SIZE = 32;
 pub const ClientState = struct {
     input_username: [64]u8 = [_]u8{0} ** 64,
@@ -12,9 +22,9 @@ pub const ClientState = struct {
     in_combat: bool = false,
     room: lib.Room,
     font: *c.TTF_Font,
-    prompt_text_texture: ?*c.SDL_Texture,
+    prompt_text: RenderableText,
     need_to_update_name_text_texture: bool,
-    name_text_texture: ?*c.SDL_Texture,
+    name_text: RenderableText,
 };
 pub const Entity = struct {
     location: WorldLocation,
