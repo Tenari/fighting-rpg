@@ -3,7 +3,7 @@ const posix = std.posix;
 const lib = @import("lib");
 const Input = lib.Input;
 const Game = lib.Game;
-const Player = lib.Player;
+const Character = lib.Character;
 const Room = lib.Room;
 const Message = lib.Message;
 
@@ -48,9 +48,6 @@ pub fn main() !void {
     while (true) {
         const byte_count = try posix.recvfrom(socket, buffer[0..], 0, &request_source_address, &addr_len);
         std.debug.print("Received {d} bytes: {s}\n", .{ byte_count, buffer[0..byte_count] });
-        // there are 2 kinds of requests:
-        // 1. public, which don't need ownership verification
-        // 2. player, which are connection-info whitelisted for a specific player
         const msg: Message = @enumFromInt(buffer[0]);
         switch (msg) {
             .get_pub_key => {
@@ -75,24 +72,27 @@ pub fn main() !void {
                 std.debug.print(".create_character with data: {s}\n", .{username});
                 var i: usize = 0;
                 var found = false;
-                for (game.players) |player| {
-                    if (player == null) {
+                for (game.characters) |character| {
+                    if (character == null) {
                         found = true;
                         break;
                     }
                     i += 1;
                 }
+                var end_index: usize = 1;
                 if (found) {
-                    game.players[i] = Player{
-                        .username = undefined,
-                        .allowed_source = request_source_address,
-                    };
-                    @memcpy(game.players[i].?.username[0..], username);
+                    game.characters[i] = Character.init(username, lib.Race.human);
+                    game.characters[i].?.id = @intCast(i);
+                    game.characters[i].?.allowed_source = request_source_address;
+                    //@memcpy(game.players[i].?.username[0..], username);
                     buffer[0] = @intFromEnum(Message.character_created);
+                    const bytes_to_send = game.characters[i].?.toBytes();
+                    end_index = (bytes_to_send.len + 1);
+                    @memcpy(buffer[1..end_index], bytes_to_send[0..]);
                 } else {
                     buffer[0] = @intFromEnum(Message.no_character_slots_left);
                 }
-                _ = try posix.sendto(socket, buffer[0..1], 0, &request_source_address, addr_len);
+                _ = try posix.sendto(socket, buffer[0..end_index], 0, &request_source_address, addr_len);
             },
             // assume anything else is player-input affecting game-state in a real-time manner
             else => {
@@ -108,9 +108,9 @@ fn gameLoop(inputs: *std.ArrayList(Input), game: *Game) void {
         for (inputs.items) |i| {
             std.debug.print("known input {any}\n", .{i.msg});
         }
-        for (game.players) |p| {
-            if (p) |player| {
-                std.debug.print("known player {s}\n", .{player.username});
+        for (game.characters) |c| {
+            if (c) |character| {
+                std.debug.print("known character {s}\n", .{character.username});
             }
         }
         const loop_duration = std.time.nanoTimestamp() - loop_start;

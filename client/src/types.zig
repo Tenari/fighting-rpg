@@ -6,6 +6,7 @@ pub const c = @cImport({
     @cInclude("SDL2/SDL_custom.h");
 });
 const lib = @import("lib");
+const Character = lib.Character;
 
 pub const RenderableText = struct {
     texture: ?*c.SDL_Texture,
@@ -34,13 +35,14 @@ pub const ClientState = struct {
     prompt_text: RenderableText,
     need_to_update_name_text_texture: bool,
     name_text: RenderableText,
+    me: Character,
 
     pub fn currentInput(self: *ClientState) *AllInputSnapshot {
         return &self.input_history[self.frame % INPUT_HISTORY_LEN];
     }
 };
 pub const Entity = struct {
-    location: WorldLocation,
+    location: lib.Location,
     render: RenderInfo,
 
     pub fn screenLocation(self: Entity) Point {
@@ -53,19 +55,6 @@ pub const Entity = struct {
 };
 pub const RenderInfo = struct {
     texture: *c.SDL_Texture,
-};
-pub const WorldLocation = struct {
-    room_id: u32,
-    x: u16,
-    y: u16,
-
-    pub fn default() WorldLocation {
-        return .{
-            .room_id = 0,
-            .x = 1,
-            .y = 1,
-        };
-    }
 };
 pub const Point = struct {
     x: f64,

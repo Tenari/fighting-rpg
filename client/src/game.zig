@@ -1,6 +1,7 @@
 const std = @import("std");
 const lib = @import("lib");
 const Message = lib.Message;
+const Character = lib.Character;
 const types = @import("types.zig");
 const c = types.c;
 const Entity = types.Entity;
@@ -41,6 +42,8 @@ pub fn pollInput(event: *c.SDL_Event, state: *ClientState) !void {
                     } else {
                         std.debug.assert(character_response.msg == Message.character_created);
                         state.making_new_character = false;
+                        state.me = Character.fromBytes(character_response.data[0..]);
+                        std.debug.print("me: {any}\n", .{state.me});
                     }
                 },
                 8 => { // backspace
@@ -96,7 +99,7 @@ pub fn initClientState(allocator: std.mem.Allocator, server_state: lib.Room, ren
         return error.TTFOpenFontError;
     };
     state.player = .{
-        .location = types.WorldLocation.default(),
+        .location = lib.Location.default(),
         .render = .{
             .texture = player_texture,
         },

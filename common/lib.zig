@@ -5,18 +5,16 @@ const expect = std.testing.expect;
 pub const DEFAULT_SERVER_HOST = "127.0.0.1";
 pub const DEFAULT_SERVER_PORT = 31173;
 
-const MAX_PLAYERS: usize = 16;
+const MAX_CHARACTERS: usize = 16;
 const MAX_ROOMS: usize = 8;
 const MAX_ITEMS: usize = 2048 * 2;
 pub const Game = struct {
-    players: [MAX_PLAYERS]?Player,
-    characters: [MAX_PLAYERS]?Character,
+    characters: [MAX_CHARACTERS]?Character,
     map: [MAX_ROOMS]Room,
     items: [MAX_ITEMS]?Item,
 
     pub fn init(self: *Game) void {
-        for (0..MAX_PLAYERS) |i| {
-            self.players[i] = null;
+        for (0..MAX_CHARACTERS) |i| {
             self.characters[i] = null;
         }
         for (0..MAX_ROOMS) |i| {
@@ -27,18 +25,6 @@ pub const Game = struct {
             self.items[i] = null;
         }
     }
-};
-
-const default64: [64]u8 = [_]u8{0} ** 64;
-
-pub const MAX_USERNAME_SIZE = 32;
-pub const Player = struct {
-    username: [MAX_USERNAME_SIZE]u8 = [_]u8{0} ** MAX_USERNAME_SIZE,
-    //    pw_hash: [64]u8 = default64,
-    //    salt: u8,
-    //    character: *Character,
-    //    last_sign_in_at: u128 = 0,
-    allowed_source: posix.sockaddr,
 };
 
 const MAX_ROOM_SIZE: usize = 32 * 32;
@@ -122,7 +108,6 @@ pub const Room = struct {
 };
 
 const MAX_ITEMS_PER_TILE = 256;
-const MAX_CHARACTERS_PER_TILE = 4;
 pub const Tile = struct {
     parent_id: RoomId,
     index: u32,
@@ -159,11 +144,8 @@ pub const Item = struct {
     qi: u32,
 };
 pub const ItemClass = enum { weapon, material, qistal };
-
 pub const Npc = enum { squirrel, wolf, bear, teacher };
-
 pub const Terrain = enum { blank, dirt, grass1, grass2, grass3, grass4, path_north, sand, water, exit, wall };
-
 pub const Realm = enum { earthly, metallic, precious, heavenly };
 pub const EarthlyStage = enum { dirt, clay, wood, stone };
 pub const MetallicStage = enum { copper, bronze, iron, steel };
@@ -190,23 +172,81 @@ pub const Stage = enum {
 pub const Race = enum { human, rat, ox, tiger, rabbit, dragon, snake, horse, sheep, monkey, rooster, dog, pig };
 
 pub const Location = struct {
-    x: u32,
-    y: u32,
-    room: RoomId = 0,
+    room_id: RoomId = 0,
+    x: u16 = 1,
+    y: u16 = 1,
+
+    pub fn default() Location {
+        return .{};
+    }
 };
+pub const MAX_USERNAME_SIZE = 32;
 pub const Character = struct {
-    name: []const u8 = "",
+    id: u32 = 0,
+    username: [MAX_USERNAME_SIZE]u8 = [_]u8{0} ** MAX_USERNAME_SIZE,
+    name: []const u8 = "", // TODO: allow username/name distinction?
     race: Race,
     realm: Realm = Realm.earthly,
     stage: Stage = Stage.earthly_dirt,
-    level: u2 = 0,
+    level: u6 = 0,
     location: Location,
+    allowed_source: posix.sockaddr,
+    //    pw_hash: [64]u8 = [_]u8{0} ** 64,
+    //    salt: u8,
+    //    character: *Character,
+    //    last_sign_in_at: u128 = 0,
 
-    pub fn init(name: []const u8, race: Race) Character {
+    pub fn init(username: *[MAX_USERNAME_SIZE]u8, race: Race) Character {
         return Character{
-            .name = name,
+            .username = username.*,
             .race = race,
+            .location = Location.default(),
+            .allowed_source = undefined,
         };
+    }
+
+    pub fn toBytes(self: *Character) []u8 {
+        var id_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &id_bytes, self.id, std.builtin.Endian.little);
+
+        //TODO: name, race, realm, stage, level serialization
+        var location: [4 + 2 + 2]u8 = undefined;
+        std.mem.writeInt(RoomId, location[0..4], self.location.room_id, std.builtin.Endian.little);
+        std.mem.writeInt(@TypeOf(self.location.x), location[4..6], self.location.x, std.builtin.Endian.little);
+        std.mem.writeInt(@TypeOf(self.location.y), location[6..], self.location.y, std.builtin.Endian.little);
+
+        const ulen = id_bytes.len + self.username.len;
+        const loclen = ulen + location.len;
+
+        var bytes: [loclen]u8 = undefined;
+        @memcpy(bytes[0..id_bytes.len], id_bytes[0..]);
+        @memcpy(bytes[id_bytes.len..ulen], self.username[0..]);
+        @memcpy(bytes[ulen..loclen], &location);
+        return bytes[0..loclen];
+    }
+
+    pub fn fromBytes(bytes: []u8) Character {
+        var c: Character = undefined;
+        // defaults
+        c.name = "";
+        c.race = Race.human;
+        c.realm = Realm.earthly;
+        c.stage = Stage.earthly_dirt;
+        c.level = 0;
+        // id deserialization
+        c.id = std.mem.readInt(u32, bytes[0..4], std.builtin.Endian.little);
+        // username deserialization
+        const uei = MAX_USERNAME_SIZE + 4;
+        @memcpy(&c.username, bytes[4..uei]);
+        // location deserialization
+        const rei = uei + 4;
+        c.location.room_id = std.mem.readInt(u32, bytes[uei..rei], std.builtin.Endian.little);
+        const xei = rei + 2;
+        c.location.x = std.mem.readInt(u16, bytes[rei..xei], std.builtin.Endian.little);
+        const yei = xei + 2;
+        c.location.y = std.mem.readInt(u16, bytes[xei..yei], std.builtin.Endian.little);
+
+        return c;
     }
 };
 
