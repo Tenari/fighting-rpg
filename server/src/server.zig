@@ -3,6 +3,7 @@ const posix = std.posix;
 const lib = @import("lib");
 const Input = lib.Input;
 const Game = lib.Game;
+const Player = lib.Player;
 const Room = lib.Room;
 const Message = lib.Message;
 
@@ -61,7 +62,6 @@ pub fn main() !void {
                 std.debug.print("bytes_sent {d}\n", .{bytes_sent});
             },
             .get_local_state => {
-                // TODO: actually return the game state for the character
                 std.debug.print(".get_local_state {any}\n", .{request_source_address});
                 buffer[0] = @intFromEnum(Message.state_is);
                 const bytes_to_send = game.map[0].toBytes();
@@ -69,6 +69,30 @@ pub fn main() !void {
                 @memcpy(buffer[1..buffer_slice_end], bytes_to_send[0..]);
                 const bytes_sent = try posix.sendto(socket, buffer[0..buffer_slice_end], 0, &request_source_address, addr_len);
                 std.debug.print("bytes_sent {d}\n{any}\n", .{ bytes_sent, buffer[0..buffer_slice_end] });
+            },
+            .create_character => {
+                const username = buffer[1..(lib.MAX_USERNAME_SIZE + 1)];
+                std.debug.print(".create_character with data: {s}\n", .{username});
+                var i: usize = 0;
+                var found = false;
+                for (game.players) |player| {
+                    if (player == null) {
+                        found = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                if (found) {
+                    game.players[i] = Player{
+                        .username = undefined,
+                        .allowed_source = request_source_address,
+                    };
+                    @memcpy(game.players[i].?.username[0..], username);
+                    buffer[0] = @intFromEnum(Message.character_created);
+                } else {
+                    buffer[0] = @intFromEnum(Message.no_character_slots_left);
+                }
+                _ = try posix.sendto(socket, buffer[0..1], 0, &request_source_address, addr_len);
             },
             // assume anything else is player-input affecting game-state in a real-time manner
             else => {
@@ -86,7 +110,7 @@ fn gameLoop(inputs: *std.ArrayList(Input), game: *Game) void {
         }
         for (game.players) |p| {
             if (p) |player| {
-                std.debug.print("known player {any}\n", .{player.username});
+                std.debug.print("known player {s}\n", .{player.username});
             }
         }
         const loop_duration = std.time.nanoTimestamp() - loop_start;

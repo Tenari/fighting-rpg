@@ -1,3 +1,6 @@
+const std = @import("std");
+const posix = std.posix;
+const Address = std.net.Address;
 pub const c = @cImport({
     //@cInclude("SDL2/SDL_image.h");
     @cInclude("SDL2/SDL_custom.h");
@@ -15,8 +18,14 @@ pub const RenderableText = struct {
 };
 
 pub const TILE_SIZE = 32;
+pub const INPUT_HISTORY_LEN = 64;
 pub const ClientState = struct {
-    input_username: [64]u8 = [_]u8{0} ** 64,
+    sock: posix.socket_t,
+    server_address: Address,
+    frame: u64 = 0,
+    should_quit: bool,
+    input_history: [INPUT_HISTORY_LEN]AllInputSnapshot,
+    input_username: [lib.MAX_USERNAME_SIZE]u8 = [_]u8{0} ** lib.MAX_USERNAME_SIZE,
     making_new_character: bool = false,
     player: Entity,
     in_combat: bool = false,
@@ -25,6 +34,10 @@ pub const ClientState = struct {
     prompt_text: RenderableText,
     need_to_update_name_text_texture: bool,
     name_text: RenderableText,
+
+    pub fn currentInput(self: *ClientState) *AllInputSnapshot {
+        return &self.input_history[self.frame % INPUT_HISTORY_LEN];
+    }
 };
 pub const Entity = struct {
     location: WorldLocation,
@@ -54,7 +67,6 @@ pub const WorldLocation = struct {
         };
     }
 };
-pub const Coord = struct {};
 pub const Point = struct {
     x: f64,
     y: f64,

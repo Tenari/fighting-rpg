@@ -29,16 +29,16 @@ pub const Game = struct {
     }
 };
 
-const default: [16]u8 = [_]u8{0} ** 16;
 const default64: [64]u8 = [_]u8{0} ** 64;
 
+pub const MAX_USERNAME_SIZE = 32;
 pub const Player = struct {
-    username: [16]u8 = default,
-    pw_hash: [64]u8 = default64,
-    salt: u8,
-    character: *Character,
-    last_sign_in_at: u128 = 0,
-    allowed_source: std.net.Address,
+    username: [MAX_USERNAME_SIZE]u8 = [_]u8{0} ** MAX_USERNAME_SIZE,
+    //    pw_hash: [64]u8 = default64,
+    //    salt: u8,
+    //    character: *Character,
+    //    last_sign_in_at: u128 = 0,
+    allowed_source: posix.sockaddr,
 };
 
 const MAX_ROOM_SIZE: usize = 32 * 32;
@@ -237,6 +237,8 @@ pub const Message = enum(u8) {
     // server responses
     pub_key_is,
     state_is,
+    character_created,
+    no_character_slots_left,
     // server-public messages
     sign_up,
     get_pub_key,

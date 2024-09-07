@@ -1,12 +1,95 @@
 const std = @import("std");
 const lib = @import("lib");
+const Message = lib.Message;
 const types = @import("types.zig");
 const c = types.c;
 const Entity = types.Entity;
 const ClientState = types.ClientState;
 
+pub fn pollInput(event: *c.SDL_Event, state: *ClientState) !void {
+    const current_input = state.currentInput();
+    switch (event.type) {
+        c.SDL_QUIT => {
+            state.should_quit = true;
+        },
+        c.SDL_KEYDOWN => {
+            std.debug.print("{any}\n", .{event.key});
+            current_input.*.controllers[0].key = event.key.keysym.sym;
+
+            switch (event.key.keysym.sym) {
+                97 => { // a
+                    current_input.*.controllers[0].direction.x = -1.0;
+                },
+                100 => { // d
+                    current_input.*.controllers[0].direction.x = 1.0;
+                },
+                119 => { // w
+                    current_input.*.controllers[0].direction.y = -1.0;
+                },
+                115 => { // s
+                    current_input.*.controllers[0].direction.y = 1.0;
+                },
+                10, 13 => { // return
+                    // currently enter/return is only meaningful in the context of making a character
+                    if (!state.making_new_character) {
+                        return;
+                    }
+                    const character_response = try lib.request_response(.{ .msg = Message.create_character, .data = &state.input_username }, state.sock, &state.server_address);
+                    std.debug.print("server character create response:\n{any}\n", .{character_response});
+                    if (character_response.msg == Message.no_character_slots_left) {
+                        // TODO: show error message saying that the server is full
+                    } else {
+                        std.debug.assert(character_response.msg == Message.character_created);
+                        state.making_new_character = false;
+                    }
+                },
+                8 => { // backspace
+                    if (state.making_new_character and state.input_username[0] != 0) {
+                        for (state.input_username, 0..) |byte, i| {
+                            if (byte == 0) {
+                                state.input_username[i - 1] = 0;
+                                state.need_to_update_name_text_texture = true;
+                                break;
+                            } else if (i == state.input_username.len - 1) {
+                                state.input_username[i] = 0;
+                                state.need_to_update_name_text_texture = true;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        },
+        c.SDL_TEXTINPUT => {
+            //std.debug.print("got textinput event: {any}\n", .{event.text.text});
+            for (state.input_username, 0..) |byte, i| {
+                if (byte == 0) {
+                    for (event.text.text, 0..) |b, j| {
+                        if (b != 0) {
+                            state.input_username[i + j] = b;
+                        } else {
+                            break;
+                        }
+                    }
+                    state.need_to_update_name_text_texture = true;
+                    break;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
 pub fn initClientState(allocator: std.mem.Allocator, server_state: lib.Room, renderer: *c.SDL_Renderer) !*ClientState {
     var state = try allocator.create(ClientState);
+    state.frame = 0;
+    state.input_username = [_]u8{0} ** lib.MAX_USERNAME_SIZE;
+    state.in_combat = false;
+    state.room = server_state;
+    state.making_new_character = false;
+    state.prompt_text = types.RenderableText.default();
+    state.name_text = types.RenderableText.default();
+
     const player_texture = c.IMG_LoadTexture(renderer, "/Users/tenari/code/combatrpg/sprite1.png") orelse return error.NullPlayerSprite;
     state.font = c.TTF_OpenFont("/Users/tenari/code/combatrpg/client/assets/edo.ttf", 30) orelse {
         std.debug.print("error {s}", .{c.TTF_GetError()});
@@ -18,12 +101,6 @@ pub fn initClientState(allocator: std.mem.Allocator, server_state: lib.Room, ren
             .texture = player_texture,
         },
     };
-    state.input_username = [_]u8{0} ** 64;
-    state.in_combat = false;
-    state.room = server_state;
-    state.making_new_character = false;
-    state.prompt_text = types.RenderableText.default();
-    state.name_text = types.RenderableText.default();
     return state;
 }
 
@@ -44,7 +121,7 @@ pub fn makeTextTexture(font: *c.TTF_Font, font_color: c.SDL_Color, renderer: *c.
     };
 }
 
-pub fn gameUpdateAndRender(renderer: *c.SDL_Renderer, state: *ClientState, input: *types.AllInputSnapshot) !void {
+pub fn updateAndRender(renderer: *c.SDL_Renderer, state: *ClientState) !void {
     if (state.making_new_character) {
         var font_color: c.SDL_Color = undefined;
         font_color.r = 0;
@@ -89,19 +166,20 @@ pub fn gameUpdateAndRender(renderer: *c.SDL_Renderer, state: *ClientState, input
     }
 
     // update
+    const current_input = state.currentInput();
     const player: *Entity = &state.player;
     const old_x = player.location.x;
     const old_y = player.location.y;
-    if (input.*.controllers[0].direction.x > 0) {
+    if (current_input.*.controllers[0].direction.x > 0) {
         player.location.x += 1;
     }
-    if (input.*.controllers[0].direction.x < 0 and player.location.x > 0) {
+    if (current_input.*.controllers[0].direction.x < 0 and player.location.x > 0) {
         player.location.x -= 1;
     }
-    if (input.*.controllers[0].direction.y > 0) {
+    if (current_input.*.controllers[0].direction.y > 0) {
         player.location.y += 1;
     }
-    if (input.*.controllers[0].direction.y < 0 and player.location.y > 0) {
+    if (current_input.*.controllers[0].direction.y < 0 and player.location.y > 0) {
         player.location.y -= 1;
     }
     const new_tile = state.room.get(.{ .x = player.location.x, .y = player.location.y });
@@ -137,4 +215,7 @@ pub fn gameUpdateAndRender(renderer: *c.SDL_Renderer, state: *ClientState, input
     _ = c.SDL_RenderCopy(renderer, player.render.texture, 0, &dest);
     //     _ = c.SDL_RenderCopy(renderer, zig_texture, null, null);
     c.SDL_RenderPresent(renderer);
+
+    // cleanup/prep for next frame
+    current_input.*.controllers[0].direction = .{ .x = -0.0, .y = 0.0 };
 }

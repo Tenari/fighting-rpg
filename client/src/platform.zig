@@ -75,6 +75,8 @@ pub fn main() !void {
 
     // init the client game state
     const state: *types.ClientState = try game.initClientState(allocator, server_state, renderer);
+    state.sock = sock;
+    state.server_address = server_address;
 
     // see if the save file exists
     const maybe_file: ?std.fs.File = std.fs.cwd().openFile("save.json", .{}) catch null;
@@ -96,84 +98,18 @@ pub fn main() !void {
         state.making_new_character = true;
     }
 
-    var input_history: [64]types.AllInputSnapshot = undefined;
-    var frame: u64 = 0;
-    var quit = false;
-    while (!quit) {
-        const current_input: *types.AllInputSnapshot = &input_history[frame % input_history.len];
-        current_input.*.controllers[0].direction = .{ .x = -0.0, .y = 0.0 };
+    while (!state.should_quit) {
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event) != 0) {
-            switch (event.type) {
-                c.SDL_QUIT => {
-                    quit = true;
-                },
-                c.SDL_KEYDOWN => {
-                    std.debug.print("{any}\n", .{event.key});
-                    current_input.*.controllers[0].key = event.key.keysym.sym;
-
-                    switch (event.key.keysym.sym) {
-                        97 => { // a
-                            current_input.*.controllers[0].direction.x = -1.0;
-                        },
-                        100 => { // d
-                            current_input.*.controllers[0].direction.x = 1.0;
-                        },
-                        119 => { // w
-                            current_input.*.controllers[0].direction.y = -1.0;
-                        },
-                        115 => { // s
-                            current_input.*.controllers[0].direction.y = 1.0;
-                        },
-                        10, 13 => { // return
-                            std.debug.print("matched return\n", .{});
-                            state.making_new_character = false;
-                            //TODO: tell server that we're a new character named state.input_username
-                        },
-                        8 => { // backspace
-                            std.debug.print("handling backspace {s}\n", .{state.input_username});
-                            if (state.making_new_character and state.input_username[0] != 0) {
-                                for (state.input_username, 0..) |byte, i| {
-                                    if (byte == 0) {
-                                        state.input_username[i - 1] = 0;
-                                        state.need_to_update_name_text_texture = true;
-                                        break;
-                                    } else if (i == state.input_username.len - 1) {
-                                        state.input_username[i] = 0;
-                                        state.need_to_update_name_text_texture = true;
-                                    }
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                },
-                c.SDL_TEXTINPUT => {
-                    std.debug.print("got textinput event: {any}\n", .{event.text.text});
-                    for (state.input_username, 0..) |byte, i| {
-                        if (byte == 0) {
-                            for (event.text.text, 0..) |b, j| {
-                                if (b != 0) {
-                                    state.input_username[i + j] = b;
-                                } else {
-                                    break;
-                                }
-                            }
-                            state.need_to_update_name_text_texture = true;
-                            break;
-                        }
-                    }
-                },
-                else => {},
-            }
+            try game.pollInput(&event, state);
         }
 
-        game.gameUpdateAndRender(renderer, state, current_input) catch |err| {
+        game.updateAndRender(renderer, state) catch |err| {
             std.debug.print("error", .{});
             return err;
         };
         c.SDL_Delay(17);
-        frame += 1;
+        state.frame += 1;
     }
 }
 
