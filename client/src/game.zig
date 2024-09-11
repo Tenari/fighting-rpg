@@ -31,34 +31,10 @@ pub fn pollInput(event: *c.SDL_Event, state: *ClientState) !void {
                     current_input.*.controllers[0].direction.y = 1.0;
                 },
                 10, 13 => { // return
-                    // currently enter/return is only meaningful in the context of making a character
-                    if (!state.making_new_character) {
-                        return;
-                    }
-                    const character_response = try lib.request_response(.{ .msg = Message.create_character, .data = &state.input_username }, state.sock, &state.server_address);
-                    std.debug.print("server character create response:\n{any}\n", .{character_response});
-                    if (character_response.msg == Message.no_character_slots_left) {
-                        // TODO: show error message saying that the server is full
-                    } else {
-                        std.debug.assert(character_response.msg == Message.character_created);
-                        state.making_new_character = false;
-                        state.me = Character.fromBytes(character_response.data[0..]);
-                        std.debug.print("me: {any}\n", .{state.me});
-                    }
+                    current_input.*.controllers[0].start = true;
                 },
                 8 => { // backspace
-                    if (state.making_new_character and state.input_username[0] != 0) {
-                        for (state.input_username, 0..) |byte, i| {
-                            if (byte == 0) {
-                                state.input_username[i - 1] = 0;
-                                state.need_to_update_name_text_texture = true;
-                                break;
-                            } else if (i == state.input_username.len - 1) {
-                                state.input_username[i] = 0;
-                                state.need_to_update_name_text_texture = true;
-                            }
-                        }
-                    }
+                    current_input.*.controllers[0].back = true;
                 },
                 else => {},
             }
@@ -88,10 +64,11 @@ pub fn initClientState(allocator: std.mem.Allocator, server_state: lib.Room, ren
     state.frame = 0;
     state.input_username = [_]u8{0} ** lib.MAX_USERNAME_SIZE;
     state.in_combat = false;
-    state.room = server_state;
+    state.world.room = server_state;
     state.making_new_character = false;
     state.prompt_text = types.RenderableText.default();
     state.name_text = types.RenderableText.default();
+    clearControllerInputs(state);
 
     const player_texture = c.IMG_LoadTexture(renderer, "/Users/tenari/code/combatrpg/sprite1.png") orelse return error.NullPlayerSprite;
     state.font = c.TTF_OpenFont("/Users/tenari/code/combatrpg/client/assets/edo.ttf", 30) orelse {
@@ -99,7 +76,7 @@ pub fn initClientState(allocator: std.mem.Allocator, server_state: lib.Room, ren
         return error.TTFOpenFontError;
     };
     state.player = .{
-        .location = lib.Location.default(),
+        .character_id = 0,
         .render = .{
             .texture = player_texture,
         },
@@ -124,7 +101,97 @@ pub fn makeTextTexture(font: *c.TTF_Font, font_color: c.SDL_Color, renderer: *c.
     };
 }
 
-pub fn updateAndRender(renderer: *c.SDL_Renderer, state: *ClientState) !void {
+pub fn update(state: *ClientState) !void {
+    // cleanup/prep for next frame
+    defer clearControllerInputs(state);
+    defer state.frame += 1;
+
+    const current_input = state.currentInput();
+
+    if (state.making_new_character) {
+        // currently 'start' is only meaningful in the context of making a character
+        if (current_input.controllers[0].start) {
+            const character_response = try lib.request_response(.{ .msg = Message.create_character, .data = &state.input_username }, state.sock, &state.server_address);
+            std.debug.print("server character create response:\n{any}\n", .{character_response});
+            if (character_response.msg == Message.no_character_slots_left) {
+                // TODO: show error message saying that the server is full
+            } else {
+                std.debug.assert(character_response.msg == Message.character_created);
+                state.making_new_character = false;
+                const temp_char = Character.fromBytes(character_response.data[0..]);
+                const char_id: usize = @intCast(temp_char.id);
+                state.world.characters[char_id] = temp_char;
+                state.player.character_id = temp_char.id;
+                std.debug.print("me: {any}\n", .{state.world.characters[char_id].?});
+            }
+        }
+
+        if (state.input_username[0] != 0 and current_input.controllers[0].back) {
+            for (state.input_username, 0..) |byte, i| {
+                if (byte == 0) {
+                    state.input_username[i - 1] = 0;
+                    state.need_to_update_name_text_texture = true;
+                    break;
+                } else if (i == state.input_username.len - 1) {
+                    state.input_username[i] = 0;
+                    state.need_to_update_name_text_texture = true;
+                }
+            }
+        }
+        return;
+    }
+
+    // TODO: rollback/update state based on server snapshots. Gotta figure out how to read server snapshots
+
+    var tried_to_change_world: bool = false;
+    const player: *Entity = &state.player;
+    if (state.world.characters[@intCast(player.character_id)]) |*char| {
+        const old_x = char.location.x;
+        const old_y = char.location.y;
+        if (current_input.*.controllers[0].direction.x > 0.01) {
+            tried_to_change_world = true;
+            std.debug.print("tried_to_change_world direction.x > 0; {d}\n", .{current_input.controllers[0].direction.x});
+            char.location.x += 1;
+        }
+        if (current_input.*.controllers[0].direction.x < -0.01 and char.location.x > 0) {
+            tried_to_change_world = true;
+            std.debug.print("tried_to_change_world direction.x < 0; {d}\n", .{current_input.controllers[0].direction.x});
+            char.location.x -= 1;
+        }
+        if (current_input.*.controllers[0].direction.y > 0.01) {
+            tried_to_change_world = true;
+            std.debug.print("tried_to_change_world direction.y > 0; {d}\n", .{current_input.controllers[0].direction.y});
+            char.location.y += 1;
+        }
+        if (current_input.*.controllers[0].direction.y < -0.01 and char.location.y > 0) {
+            tried_to_change_world = true;
+            std.debug.print("tried_to_change_world direction.y < 0; {d}\n", .{current_input.controllers[0].direction.y});
+            char.location.y -= 1;
+        }
+        const new_tile = state.world.room.get(.{ .x = char.location.x, .y = char.location.y });
+        if (new_tile.terrain == lib.Terrain.wall) {
+            char.location.x = old_x;
+            char.location.y = old_y;
+        }
+    }
+
+    // TODO: if the current_input is one that needs to be sent to the server, send it. This happens when our own prediction of the new state.world *might* be different. "Might be" because we can't assume that e.g. players blocking our path are actually still in the way. So essentially, if we had a user input state that was "trying" to affect the `state.world`, whether or not it actually did affect it (according to our simulation) we still need to send that input.
+    if (tried_to_change_world) {
+        const input_bytes = current_input.controllers[0].toBytes();
+        var buffer: [20]u8 = undefined;
+        @memcpy(buffer[0..input_bytes.len], input_bytes[0..]);
+        var id_buffer: [4]u8 = undefined;
+        std.mem.writeInt(u32, &id_buffer, player.character_id, std.builtin.Endian.little);
+        @memcpy(buffer[input_bytes.len..], id_buffer[0..]);
+        std.debug.print("tried_to_change_world sending {any}\n", .{buffer});
+        _ = try lib.request(.{ .msg = Message.move, .data = &buffer }, state.sock, &state.server_address);
+    }
+}
+
+pub fn render(renderer: *c.SDL_Renderer, state: *ClientState) !void {
+    // sdl setup
+    _ = c.SDL_RenderClear(renderer);
+
     if (state.making_new_character) {
         var font_color: c.SDL_Color = undefined;
         font_color.r = 0;
@@ -142,9 +209,6 @@ pub fn updateAndRender(renderer: *c.SDL_Renderer, state: *ClientState) !void {
         dest.h = state.prompt_text.height;
         dest.x = 50;
         dest.y = 50;
-
-        // sdl setup
-        _ = c.SDL_RenderClear(renderer);
 
         // render the new character ui
         _ = c.SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
@@ -168,36 +232,11 @@ pub fn updateAndRender(renderer: *c.SDL_Renderer, state: *ClientState) !void {
         return c.SDL_RenderPresent(renderer);
     }
 
-    // update
-    const current_input = state.currentInput();
-    const player: *Entity = &state.player;
-    const old_x = player.location.x;
-    const old_y = player.location.y;
-    if (current_input.*.controllers[0].direction.x > 0) {
-        player.location.x += 1;
-    }
-    if (current_input.*.controllers[0].direction.x < 0 and player.location.x > 0) {
-        player.location.x -= 1;
-    }
-    if (current_input.*.controllers[0].direction.y > 0) {
-        player.location.y += 1;
-    }
-    if (current_input.*.controllers[0].direction.y < 0 and player.location.y > 0) {
-        player.location.y -= 1;
-    }
-    const new_tile = state.room.get(.{ .x = player.location.x, .y = player.location.y });
-    if (new_tile.terrain == lib.Terrain.wall) {
-        player.location.x = old_x;
-        player.location.y = old_y;
-    }
-
-    // render
-    _ = c.SDL_RenderClear(renderer);
     // draw the map
     var dest: c.SDL_Rect = undefined;
     dest.w = types.TILE_SIZE;
     dest.h = types.TILE_SIZE;
-    for (&state.room.tiles, 0..) |*tile, i| {
+    for (&state.world.room.tiles, 0..) |*tile, i| {
         if (tile.terrain == lib.Terrain.blank) {
             continue;
         }
@@ -206,19 +245,26 @@ pub fn updateAndRender(renderer: *c.SDL_Renderer, state: *ClientState) !void {
         } else {
             _ = c.SDL_SetRenderDrawColor(renderer, 0, 255, 0, 0);
         }
-        dest.x = @intCast((i % state.room.width) * types.TILE_SIZE);
-        dest.y = @intCast((i / state.room.width) * types.TILE_SIZE);
+        dest.x = @intCast((i % state.world.room.width) * types.TILE_SIZE);
+        dest.y = @intCast((i / state.world.room.width) * types.TILE_SIZE);
         _ = c.SDL_RenderFillRect(renderer, &dest);
     }
     // draw the player
-    const point = player.screenLocation();
+    const player: *Entity = &state.player;
+    const point = player.screenLocation(state);
     dest.x = @intFromFloat(point.x);
     dest.y = @intFromFloat(point.y);
     //_ = c.SDL_QueryTexture(player.render.texture, 0, 0, &dest.w, &dest.h);
     _ = c.SDL_RenderCopy(renderer, player.render.texture, 0, &dest);
     //     _ = c.SDL_RenderCopy(renderer, zig_texture, null, null);
     c.SDL_RenderPresent(renderer);
+}
 
-    // cleanup/prep for next frame
-    current_input.*.controllers[0].direction = .{ .x = -0.0, .y = 0.0 };
+fn clearControllerInputs(state: *ClientState) void {
+    const current_input = state.currentInput();
+    for (&current_input.controllers) |*controller| {
+        controller.*.direction = .{ .x = 0.0, .y = 0.0 };
+        controller.*.start = false;
+        controller.*.back = false;
+    }
 }

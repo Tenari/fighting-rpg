@@ -5,7 +5,7 @@ const expect = std.testing.expect;
 pub const DEFAULT_SERVER_HOST = "127.0.0.1";
 pub const DEFAULT_SERVER_PORT = 31173;
 
-const MAX_CHARACTERS: usize = 16;
+pub const MAX_CHARACTERS: usize = 16;
 const MAX_ROOMS: usize = 8;
 const MAX_ITEMS: usize = 2048 * 2;
 pub const Game = struct {
@@ -171,6 +171,14 @@ pub const Stage = enum {
 };
 pub const Race = enum { human, rat, ox, tiger, rabbit, dragon, snake, horse, sheep, monkey, rooster, dog, pig };
 
+pub const Point = struct {
+    x: f64 = 0.0,
+    y: f64 = 0.0,
+
+    pub fn default() Point {
+        return .{};
+    }
+};
 pub const Location = struct {
     room_id: RoomId = 0,
     x: u16 = 1,
@@ -250,8 +258,8 @@ pub const Character = struct {
     }
 };
 
-/// send an Input to the server, and receive an Input back
-pub fn request_response(input: Input, s: posix.socket_t, addr: *std.net.Address) !Input {
+/// send an Input to the server
+pub fn request(input: Input, s: posix.socket_t, addr: *std.net.Address) !posix.socklen_t {
     // make the message as array of bytes
     var buffer: [1024 * 32]u8 = undefined;
     buffer[0] = @intFromEnum(input.msg);
@@ -260,8 +268,15 @@ pub fn request_response(input: Input, s: posix.socket_t, addr: *std.net.Address)
         @memcpy(buffer[1..input_buf_len], input.data);
     }
     // send it
-    var addr_len = addr.getOsSockLen();
+    const addr_len = addr.getOsSockLen();
     _ = try posix.sendto(s, buffer[0..input_buf_len], 0, &addr.*.any, addr_len);
+    return addr_len;
+}
+
+/// send an Input to the server, and receive an Input back
+pub fn request_response(input: Input, s: posix.socket_t, addr: *std.net.Address) !Input {
+    var buffer: [1024 * 32]u8 = undefined;
+    var addr_len = try request(input, s, addr);
     // get response (overwriting buffer)
     const byte_count = try posix.recvfrom(s, buffer[0..], 0, &addr.*.any, &addr_len);
     const msg_type: Message = @enumFromInt(buffer[0]);

@@ -7,6 +7,7 @@ pub const c = @cImport({
 });
 const lib = @import("lib");
 const Character = lib.Character;
+const Point = lib.Point;
 
 pub const RenderableText = struct {
     texture: ?*c.SDL_Texture,
@@ -18,9 +19,18 @@ pub const RenderableText = struct {
     }
 };
 
+const LocalWorld = struct {
+    characters: [lib.MAX_CHARACTERS]?Character,
+    room: lib.Room,
+};
+
 pub const TILE_SIZE = 32;
 pub const INPUT_HISTORY_LEN = 64;
 pub const ClientState = struct {
+    // "public" state which mirrors what's on the server
+    world: LocalWorld,
+
+    // "private" state which is just for the client's own purposes
     sock: posix.socket_t,
     server_address: Address,
     frame: u64 = 0,
@@ -30,35 +40,35 @@ pub const ClientState = struct {
     making_new_character: bool = false,
     player: Entity,
     in_combat: bool = false,
-    room: lib.Room,
     font: *c.TTF_Font,
     prompt_text: RenderableText,
     need_to_update_name_text_texture: bool,
     name_text: RenderableText,
-    me: Character,
 
     pub fn currentInput(self: *ClientState) *AllInputSnapshot {
         return &self.input_history[self.frame % INPUT_HISTORY_LEN];
     }
 };
 pub const Entity = struct {
-    location: lib.Location,
+    character_id: u32,
     render: RenderInfo,
 
-    pub fn screenLocation(self: Entity) Point {
-        // TODO implement
-        return .{
-            .x = @floatFromInt(self.location.x * TILE_SIZE),
-            .y = @floatFromInt(self.location.y * TILE_SIZE),
-        };
+    pub fn screenLocation(self: Entity, state: *ClientState) Point {
+        if (state.world.characters[@intCast(self.character_id)]) |character| {
+            return .{
+                .x = @floatFromInt(character.location.x * TILE_SIZE),
+                .y = @floatFromInt(character.location.y * TILE_SIZE),
+            };
+        } else {
+            return .{
+                .x = 0.0,
+                .y = 0.0,
+            };
+        }
     }
 };
 pub const RenderInfo = struct {
     texture: *c.SDL_Texture,
-};
-pub const Point = struct {
-    x: f64,
-    y: f64,
 };
 pub const ControllerInputSnapshot = struct {
     direction: Point,
@@ -70,6 +80,14 @@ pub const ControllerInputSnapshot = struct {
     start: bool,
     back: bool,
     key: i32, // character byte where 97 = 'a'
+
+    pub fn toBytes(self: ControllerInputSnapshot) []u8 {
+        // TODO: all the other buttons
+        var bytes: [16]u8 = undefined;
+        @memcpy(bytes[0..8], std.mem.asBytes(&self.direction.x));
+        @memcpy(bytes[8..], std.mem.asBytes(&self.direction.y));
+        return bytes[0..];
+    }
 };
 pub const MouseInputSnapshot = struct {
     location: Point,

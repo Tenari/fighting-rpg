@@ -107,10 +107,34 @@ fn gameLoop(inputs: *std.ArrayList(Input), game: *Game) void {
         const loop_start = std.time.nanoTimestamp();
         for (inputs.items) |i| {
             std.debug.print("known input {any}\n", .{i.msg});
+            switch (i.msg) {
+                .move => {
+                    std.debug.print("bytes {any}\n", .{i.data});
+                    const character_id = std.mem.readInt(u32, i.data[16..20], std.builtin.Endian.little);
+                    //TODO: figure out how to actually parse this properly
+                    const x: f64 = std.mem.bytesToValue(f64, i.data[0..8]);
+                    //const y: f64 = @bitCast(i.data[12..]);
+                    std.debug.print("character_id {d}; x = {d}\n", .{ character_id, x });
+                    if (game.characters[@intCast(character_id)]) |*character| {
+                        if (x > 0.01) {
+                            std.debug.print("moving right\n", .{});
+                            character.location.x += 1;
+                        }
+                        if (x < -0.01 and character.location.x > 0) {
+                            std.debug.print("moving left\n", .{});
+                            character.location.x -= 1;
+                        }
+                    }
+                },
+                else => {
+                    std.debug.print("ignored input {any}\n", .{i.msg});
+                },
+            }
         }
+        inputs.clearRetainingCapacity();
         for (game.characters) |c| {
             if (c) |character| {
-                std.debug.print("known character {s}\n", .{character.username});
+                std.debug.print("known character {s} @ ({d},{d})\n", .{ character.username, character.location.x, character.location.y });
             }
         }
         const loop_duration = std.time.nanoTimestamp() - loop_start;

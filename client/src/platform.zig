@@ -91,25 +91,26 @@ pub fn main() !void {
         //TODO: request password from user to prove ownership. this is just to make the compiler happy currently
         _ = save_file;
     } else {
-        //TODO: show signup form
-        //const signup_response = try lib.request_response(.{ .msg = Message.sign_up, .data = &.{} }, sock, &server_address);
-        //std.debug.assert(signup_response.msg == Message.pub_key_is);
-
+        // show signup form
         state.making_new_character = true;
     }
 
     while (!state.should_quit) {
+        // poll all input devices
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event) != 0) {
             try game.pollInput(&event, state);
         }
 
-        game.updateAndRender(renderer, state) catch |err| {
+        // update current game state
+        try game.update(state);
+
+        // render current game state
+        game.render(renderer, state) catch |err| {
             std.debug.print("error", .{});
             return err;
         };
         c.SDL_Delay(17);
-        state.frame += 1;
     }
 }
 
