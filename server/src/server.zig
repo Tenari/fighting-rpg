@@ -4,11 +4,13 @@ const lib = @import("lib");
 const Input = lib.Input;
 const Game = lib.Game;
 const Character = lib.Character;
+const Location = lib.Location;
+const Terrain = lib.Terrain;
 const Room = lib.Room;
 const Message = lib.Message;
 
-const fps: i128 = 1;
-const goal_loop_time: i128 = std.time.ns_per_s / fps;
+const fps: i128 = 66;
+const GOAL_LOOP_TIME: i128 = std.time.ns_per_s / fps;
 
 pub fn main() !void {
     const seed: [32]u8 = [4]u8{ 1, 2, 3, 4 } ** 8;
@@ -34,7 +36,8 @@ pub fn main() !void {
     defer inputs.deinit();
 
     // spin off thread for the game-loop
-    const game_thread_handle = try std.Thread.spawn(.{}, gameLoop, .{ &inputs, game });
+    var mutex = std.Thread.Mutex{};
+    const game_thread_handle = try std.Thread.spawn(.{}, gameLoop, .{ &inputs, game, &mutex });
     game_thread_handle.detach();
 
     // start the udp server for setting inputs
@@ -49,6 +52,7 @@ pub fn main() !void {
         const byte_count = try posix.recvfrom(socket, buffer[0..], 0, &request_source_address, &addr_len);
         std.debug.print("Received {d} bytes: {s}\n", .{ byte_count, buffer[0..byte_count] });
         const msg: Message = @enumFromInt(buffer[0]);
+        mutex.lock();
         switch (msg) {
             .get_pub_key => {
                 std.debug.print(".get_pub_key {any}\n", .{request_source_address});
@@ -99,31 +103,25 @@ pub fn main() !void {
                 try inputs.append(.{ .msg = msg, .data = buffer[1..byte_count] });
             },
         }
+        mutex.unlock();
     }
 }
 
-fn gameLoop(inputs: *std.ArrayList(Input), game: *Game) void {
+fn gameLoop(inputs: *std.ArrayList(Input), game: *Game, mutex: *std.Thread.Mutex) void {
     while (true) {
         const loop_start = std.time.nanoTimestamp();
+        mutex.lock();
         for (inputs.items) |i| {
             std.debug.print("known input {any}\n", .{i.msg});
             switch (i.msg) {
                 .move => {
                     std.debug.print("bytes {any}\n", .{i.data});
                     const character_id = std.mem.readInt(u32, i.data[16..20], std.builtin.Endian.little);
-                    //TODO: figure out how to actually parse this properly
                     const x: f64 = std.mem.bytesToValue(f64, i.data[0..8]);
-                    //const y: f64 = @bitCast(i.data[12..]);
-                    std.debug.print("character_id {d}; x = {d}\n", .{ character_id, x });
+                    const y: f64 = std.mem.bytesToValue(f64, i.data[8..16]);
+                    std.debug.print("character_id {d}; x = {d}; y = {d}\n", .{ character_id, x, y });
                     if (game.characters[@intCast(character_id)]) |*character| {
-                        if (x > 0.01) {
-                            std.debug.print("moving right\n", .{});
-                            character.location.x += 1;
-                        }
-                        if (x < -0.01 and character.location.x > 0) {
-                            std.debug.print("moving left\n", .{});
-                            character.location.x -= 1;
-                        }
+                        _ = character.attemptMoveFromInput(.{ .x = x, .y = y }, &game.map[@intCast(character.location.room_id)]);
                     }
                 },
                 else => {
@@ -137,8 +135,9 @@ fn gameLoop(inputs: *std.ArrayList(Input), game: *Game) void {
                 std.debug.print("known character {s} @ ({d},{d})\n", .{ character.username, character.location.x, character.location.y });
             }
         }
+        mutex.unlock();
         const loop_duration = std.time.nanoTimestamp() - loop_start;
-        const remaining_time = goal_loop_time - loop_duration;
+        const remaining_time = GOAL_LOOP_TIME - loop_duration;
         if (remaining_time > 0) {
             std.time.sleep(@intCast(remaining_time));
         }

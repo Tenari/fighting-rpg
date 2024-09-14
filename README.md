@@ -53,6 +53,12 @@ Full game-world state is held in-memory. UDP connections to all clients are sime
 
 ## Design Ideas
 
+### Pardus adaptation
+
+ship-to-ship bullet-hell/side-scrolling-shooter ship combat as the pvp p2p. Would be an interesting take on a fighting game. No idea how fun/good it would be.
+
+WASD for ship, plus mouse for aim. maybe only one gun can fire at a time, and so you have to cycle through weapons quickly to keep using up your "ready" guns. Right click for missiles.
+
 ### Character creation
 
 First choose species:

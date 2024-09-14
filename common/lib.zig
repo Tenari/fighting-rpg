@@ -256,6 +256,37 @@ pub const Character = struct {
 
         return c;
     }
+    pub fn attemptMoveFromInput(self: *Character, p: Point, room: *Room) bool {
+        var tried_to_change_world: bool = false;
+        const old_x = self.location.x;
+        const old_y = self.location.y;
+        if (p.x > 0.01) {
+            std.debug.print("moving right\n", .{});
+            self.location.x += 1;
+            tried_to_change_world = true;
+        }
+        if (p.x < -0.01 and self.location.x > 0) {
+            std.debug.print("moving left\n", .{});
+            self.location.x -= 1;
+            tried_to_change_world = true;
+        }
+        if (p.y > 0.01) {
+            std.debug.print("moving down\n", .{});
+            self.location.y += 1;
+            tried_to_change_world = true;
+        }
+        if (p.y < -0.01 and self.location.y > 0) {
+            std.debug.print("moving up\n", .{});
+            self.location.y -= 1;
+            tried_to_change_world = true;
+        }
+        const new_tile = room.get(.{ .x = self.location.x, .y = self.location.y });
+        if (new_tile.terrain == Terrain.wall) {
+            self.location.x = old_x;
+            self.location.y = old_y;
+        }
+        return tried_to_change_world;
+    }
 };
 
 /// send an Input to the server

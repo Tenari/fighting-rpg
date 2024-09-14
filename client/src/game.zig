@@ -146,33 +146,7 @@ pub fn update(state: *ClientState) !void {
     var tried_to_change_world: bool = false;
     const player: *Entity = &state.player;
     if (state.world.characters[@intCast(player.character_id)]) |*char| {
-        const old_x = char.location.x;
-        const old_y = char.location.y;
-        if (current_input.*.controllers[0].direction.x > 0.01) {
-            tried_to_change_world = true;
-            std.debug.print("tried_to_change_world direction.x > 0; {d}\n", .{current_input.controllers[0].direction.x});
-            char.location.x += 1;
-        }
-        if (current_input.*.controllers[0].direction.x < -0.01 and char.location.x > 0) {
-            tried_to_change_world = true;
-            std.debug.print("tried_to_change_world direction.x < 0; {d}\n", .{current_input.controllers[0].direction.x});
-            char.location.x -= 1;
-        }
-        if (current_input.*.controllers[0].direction.y > 0.01) {
-            tried_to_change_world = true;
-            std.debug.print("tried_to_change_world direction.y > 0; {d}\n", .{current_input.controllers[0].direction.y});
-            char.location.y += 1;
-        }
-        if (current_input.*.controllers[0].direction.y < -0.01 and char.location.y > 0) {
-            tried_to_change_world = true;
-            std.debug.print("tried_to_change_world direction.y < 0; {d}\n", .{current_input.controllers[0].direction.y});
-            char.location.y -= 1;
-        }
-        const new_tile = state.world.room.get(.{ .x = char.location.x, .y = char.location.y });
-        if (new_tile.terrain == lib.Terrain.wall) {
-            char.location.x = old_x;
-            char.location.y = old_y;
-        }
+        tried_to_change_world = char.attemptMoveFromInput(current_input.controllers[0].direction, &state.world.room);
     }
 
     // TODO: if the current_input is one that needs to be sent to the server, send it. This happens when our own prediction of the new state.world *might* be different. "Might be" because we can't assume that e.g. players blocking our path are actually still in the way. So essentially, if we had a user input state that was "trying" to affect the `state.world`, whether or not it actually did affect it (according to our simulation) we still need to send that input.
