@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const expect = std.testing.expect;
 
@@ -7,11 +8,13 @@ pub const DEFAULT_SERVER_PORT = 31173;
 
 pub const MAX_CHARACTERS: usize = 16;
 const MAX_ROOMS: usize = 8;
-const MAX_ITEMS: usize = 2048 * 2;
+const RESERVED_TILE_COUNT = 1024 * MAX_ROOMS; // reserve 32x32 tiles per room
+//const MAX_ITEMS: usize = 2; //2048 * 2;
 pub const Game = struct {
     characters: [MAX_CHARACTERS]?Character,
     map: [MAX_ROOMS]Room,
-    items: [MAX_ITEMS]?Item,
+    //items: [MAX_ITEMS]?Item,
+    tiles: [RESERVED_TILE_COUNT]Tile,
 
     pub fn init(self: *Game) void {
         for (0..MAX_CHARACTERS) |i| {
@@ -20,25 +23,26 @@ pub const Game = struct {
         for (0..MAX_ROOMS) |i| {
             self.map[i] = Room.default(@intCast(i));
         }
-        self.map[0].setTilesFromBytes(@embedFile("map.txt"));
-        for (0..MAX_ITEMS) |i| {
-            self.items[i] = null;
-        }
+        const map = @embedFile("map.txt");
+        self.map[0].tiles = self.tiles[0..map.len];
+        self.map[0].setTilesFromBytes(map);
+        //for (0..MAX_ITEMS) |i| {
+        //    self.items[i] = null;
+        //}
     }
 };
 
-const MAX_ROOM_SIZE: usize = 32 * 32;
 pub const RoomId = u32;
 pub const Room = struct {
     id: RoomId,
-    tiles: [MAX_ROOM_SIZE]Tile,
+    tiles: []Tile,
     height: u32,
     width: u32,
 
     pub fn default(id: RoomId) Room {
         return .{
             .id = id,
-            .tiles = [_]Tile{Tile.default(id)} ** MAX_ROOM_SIZE,
+            .tiles = &.{},
             .height = 0,
             .width = 0,
         };
@@ -50,11 +54,13 @@ pub const Room = struct {
             std.debug.print("{d}", .{byte});
             switch (byte) {
                 119 => { // w = wall
+                    self.tiles[i].parent_id = self.id;
                     self.tiles[i].index = i;
                     self.tiles[i].terrain = Terrain.wall;
                     i += 1;
                 },
                 32 => { // space = dirt
+                    self.tiles[i].parent_id = self.id;
                     self.tiles[i].index = i;
                     self.tiles[i].terrain = Terrain.dirt;
                     i += 1;
@@ -72,54 +78,27 @@ pub const Room = struct {
                 },
             }
         }
+        self.tiles.len = i;
     }
 
     pub fn get(self: *Room, location: Location) *Tile {
         const access = (location.y * self.width) + location.x;
         return &self.tiles[access];
     }
-
-    pub fn toBytes(self: *Room) []u8 {
-        var id_bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &id_bytes, self.id, std.builtin.Endian.little);
-        var height: [4]u8 = undefined;
-        std.mem.writeInt(u32, &height, self.height, std.builtin.Endian.little);
-        var width: [4]u8 = undefined;
-        std.mem.writeInt(u32, &width, self.width, std.builtin.Endian.little);
-        var tile_bytes: [MAX_ROOM_SIZE]u8 = undefined;
-        var last_valid_tile: usize = 0;
-        for (&self.tiles, 0..) |*tile, i| {
-            tile_bytes[i] = tile.asByte();
-            if (tile.terrain != Terrain.blank) {
-                last_valid_tile = i;
-            }
-        }
-
-        const hilen = id_bytes.len + height.len;
-        const wilen = hilen + width.len;
-        const finalen = wilen + last_valid_tile;
-        var bytes: [wilen + MAX_ROOM_SIZE]u8 = undefined;
-        @memcpy(bytes[0..id_bytes.len], id_bytes[0..]);
-        @memcpy(bytes[id_bytes.len..hilen], height[0..]);
-        @memcpy(bytes[hilen..wilen], width[0..]);
-        @memcpy(bytes[wilen..finalen], tile_bytes[0..last_valid_tile]);
-        return bytes[0..finalen];
-    }
 };
 
-const MAX_ITEMS_PER_TILE = 256;
 pub const Tile = struct {
     parent_id: RoomId,
     index: u32,
     terrain: Terrain,
-    connect: ?u32, // when a character/NPC steps on this tile, they are auto-warped to the other tile, for things like doors
+    //connect: ?u32, // when a character/NPC steps on this tile, they are auto-warped to the other tile, for things like doors
 
-    fn default(id: RoomId) Tile {
+    pub fn default(id: RoomId) Tile {
         return .{
             .parent_id = id,
             .index = 0,
             .terrain = Terrain.blank,
-            .connect = null,
+            //.connect = null,
         };
     }
 
@@ -145,7 +124,7 @@ pub const Item = struct {
 };
 pub const ItemClass = enum { weapon, material, qistal };
 pub const Npc = enum { squirrel, wolf, bear, teacher };
-pub const Terrain = enum { blank, dirt, grass1, grass2, grass3, grass4, path_north, sand, water, exit, wall };
+pub const Terrain = enum(u8) { blank, dirt, grass1, grass2, grass3, grass4, path_north, sand, water, exit, wall };
 pub const Realm = enum { earthly, metallic, precious, heavenly };
 pub const EarthlyStage = enum { dirt, clay, wood, stone };
 pub const MetallicStage = enum { copper, bronze, iron, steel };
@@ -171,6 +150,10 @@ pub const Stage = enum {
 };
 pub const Race = enum { human, rat, ox, tiger, rabbit, dragon, snake, horse, sheep, monkey, rooster, dog, pig };
 
+pub const MoveCommand = struct {
+    character_id: CharacterId,
+    point: Point,
+};
 pub const Point = struct {
     x: f64 = 0.0,
     y: f64 = 0.0,
@@ -189,14 +172,15 @@ pub const Location = struct {
     }
 };
 pub const MAX_USERNAME_SIZE = 32;
+pub const CharacterId = u32;
 pub const Character = struct {
-    id: u32 = 0,
+    id: CharacterId = 0,
     username: [MAX_USERNAME_SIZE]u8 = [_]u8{0} ** MAX_USERNAME_SIZE,
-    name: []const u8 = "", // TODO: allow username/name distinction?
+    //    name: []const u8 = "", // TODO: allow username/name distinction?
     race: Race,
     realm: Realm = Realm.earthly,
     stage: Stage = Stage.earthly_dirt,
-    level: u6 = 0,
+    level: u8 = 0,
     location: Location,
     allowed_source: posix.sockaddr,
     //    pw_hash: [64]u8 = [_]u8{0} ** 64,
@@ -213,49 +197,6 @@ pub const Character = struct {
         };
     }
 
-    pub fn toBytes(self: *Character) []u8 {
-        var id_bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &id_bytes, self.id, std.builtin.Endian.little);
-
-        //TODO: name, race, realm, stage, level serialization
-        var location: [4 + 2 + 2]u8 = undefined;
-        std.mem.writeInt(RoomId, location[0..4], self.location.room_id, std.builtin.Endian.little);
-        std.mem.writeInt(@TypeOf(self.location.x), location[4..6], self.location.x, std.builtin.Endian.little);
-        std.mem.writeInt(@TypeOf(self.location.y), location[6..], self.location.y, std.builtin.Endian.little);
-
-        const ulen = id_bytes.len + self.username.len;
-        const loclen = ulen + location.len;
-
-        var bytes: [loclen]u8 = undefined;
-        @memcpy(bytes[0..id_bytes.len], id_bytes[0..]);
-        @memcpy(bytes[id_bytes.len..ulen], self.username[0..]);
-        @memcpy(bytes[ulen..loclen], &location);
-        return bytes[0..loclen];
-    }
-
-    pub fn fromBytes(bytes: []u8) Character {
-        var c: Character = undefined;
-        // defaults
-        c.name = "";
-        c.race = Race.human;
-        c.realm = Realm.earthly;
-        c.stage = Stage.earthly_dirt;
-        c.level = 0;
-        // id deserialization
-        c.id = std.mem.readInt(u32, bytes[0..4], std.builtin.Endian.little);
-        // username deserialization
-        const uei = MAX_USERNAME_SIZE + 4;
-        @memcpy(&c.username, bytes[4..uei]);
-        // location deserialization
-        const rei = uei + 4;
-        c.location.room_id = std.mem.readInt(u32, bytes[uei..rei], std.builtin.Endian.little);
-        const xei = rei + 2;
-        c.location.x = std.mem.readInt(u16, bytes[rei..xei], std.builtin.Endian.little);
-        const yei = xei + 2;
-        c.location.y = std.mem.readInt(u16, bytes[xei..yei], std.builtin.Endian.little);
-
-        return c;
-    }
     pub fn attemptMoveFromInput(self: *Character, p: Point, room: *Room) bool {
         var tried_to_change_world: bool = false;
         const old_x = self.location.x;
@@ -289,37 +230,81 @@ pub const Character = struct {
     }
 };
 
-/// send an Input to the server
-pub fn request(input: Input, s: posix.socket_t, addr: *std.net.Address) !posix.socklen_t {
+/// send a Packet to the server
+pub fn request(packet: Packet, s: posix.socket_t, addr: *std.net.Address) !posix.socklen_t {
     // make the message as array of bytes
     var buffer: [1024 * 32]u8 = undefined;
-    buffer[0] = @intFromEnum(input.msg);
-    const input_buf_len = input.data.len + 1;
-    if (input.data.len > 0) {
-        @memcpy(buffer[1..input_buf_len], input.data);
+    buffer[0] = @intFromEnum(packet.msg);
+    const buf_len = packet.data.len + 1;
+    if (packet.data.len > 0) {
+        @memcpy(buffer[1..buf_len], packet.data);
     }
     // send it
     const addr_len = addr.getOsSockLen();
-    _ = try posix.sendto(s, buffer[0..input_buf_len], 0, &addr.*.any, addr_len);
+    _ = try posix.sendto(s, buffer[0..buf_len], 0, &addr.*.any, addr_len);
     return addr_len;
 }
 
-/// send an Input to the server, and receive an Input back
-pub fn request_response(input: Input, s: posix.socket_t, addr: *std.net.Address) !Input {
-    var buffer: [1024 * 32]u8 = undefined;
-    var addr_len = try request(input, s, addr);
-    // get response (overwriting buffer)
-    const byte_count = try posix.recvfrom(s, buffer[0..], 0, &addr.*.any, &addr_len);
-    const msg_type: Message = @enumFromInt(buffer[0]);
-    return .{ .msg = msg_type, .data = buffer[1..byte_count] };
+/// send a Packet to the server, and receive a Packet back
+pub fn request_response(allocator: Allocator, packet: Packet, s: posix.socket_t, addr: *std.net.Address) !Packet {
+    var addr_len = try request(packet, s, addr);
+    return try receive(allocator, s, addr, &addr_len);
 }
 
-pub const Input = struct {
+pub fn receive(allocator: Allocator, s: posix.socket_t, addr: *std.net.Address, addr_len: *posix.socklen_t) !Packet {
+    var buffer: [1024 * 32]u8 = undefined;
+    const byte_count = try posix.recvfrom(s, buffer[0..], 0, &addr.*.any, addr_len);
+    const msg_type: Message = @enumFromInt(buffer[0]);
+    var result = Packet.init(allocator, msg_type, &.{});
+    if (byte_count > 1) {
+        try result.addData(buffer[1..byte_count]);
+    }
+    return result;
+}
+
+pub fn receiveInto(buffer: []u8, s: posix.socket_t, addr: *std.net.Address, addr_len: *posix.socklen_t) !Packet {
+    const byte_count = try posix.recvfrom(s, buffer[0..], 0, &addr.*.any, addr_len);
+    const msg_type: Message = @enumFromInt(buffer[0]);
+    var slice: []u8 = &.{};
+    if (byte_count > 1) {
+        slice = buffer[1..byte_count];
+    }
+    return Packet{
+        .msg = msg_type,
+        .data = slice,
+    };
+}
+
+pub const Packet = struct {
+    const Self = @This();
     msg: Message,
     data: []u8,
+    allocator: ?Allocator = null,
+
+    pub fn init(allocator: Allocator, msg: Message, data: []u8) Self {
+        return .{ .allocator = allocator, .msg = msg, .data = data };
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.allocator) |alloc| {
+            alloc.free(self.data);
+        }
+    }
+
+    // allocates and copies the given data
+    pub fn addData(self: *Self, data: []u8) !void {
+        if (self.allocator) |alloc| {
+            self.data = try alloc.alloc(u8, data.len);
+            @memcpy(self.data, data);
+        } else {
+            return error.AllocatorNotDefined;
+        }
+    }
 };
 
 pub const Message = enum(u8) {
+    // server "push" messages
+    snapshot,
     // server responses
     pub_key_is,
     state_is,
@@ -334,4 +319,331 @@ pub const Message = enum(u8) {
     create_character,
     move,
     clear_player_source, // server "signs out" the player
+};
+
+pub const Snapshot = struct {
+    room: Room,
+    characters: []Character,
+};
+
+test Serializer {
+    const size = 16 + 4 + (4 * 2 * 3);
+    var bytes: [size]u8 = [_]u8{0} ** size;
+
+    const En = enum(u2) { zero, one, two, three };
+    var s = Serializer.init(&bytes);
+    s.write(En, En.one);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    const read_val: En = @enumFromInt(std.mem.readInt(u8, bytes[0..1], std.builtin.Endian.little));
+    try std.testing.expect(En.one == read_val);
+
+    s = Serializer.init(&bytes);
+    s.write(u16, 245);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    try std.testing.expect(245 == std.mem.readInt(u16, bytes[0..2], std.builtin.Endian.little));
+
+    s = Serializer.init(&bytes);
+    s.write(i32, -245);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    try std.testing.expect(-245 == std.mem.readInt(i32, bytes[0..4], std.builtin.Endian.little));
+
+    s = Serializer.init(&bytes);
+    s.write(f32, -245.6);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    try std.testing.expect(-245.6 == std.mem.littleToNative(f32, std.mem.bytesToValue(f32, bytes[0..4])));
+
+    const Str = struct { a: i32, b: f64 };
+    s = Serializer.init(&bytes);
+    s.write(Str, Str{ .a = -1, .b = 0.5 });
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    try std.testing.expect(-1 == std.mem.readInt(i32, bytes[0..4], std.builtin.Endian.little));
+    try std.testing.expect(0.5 == std.mem.littleToNative(f64, std.mem.bytesToValue(f64, bytes[4..12])));
+
+    const Str2 = struct { a: u8, b: Str };
+    s = Serializer.init(&bytes);
+    s.write(Str2, Str2{ .a = 100, .b = .{ .a = 1024, .b = -101.101 } });
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    try std.testing.expect(100 == std.mem.readInt(u8, bytes[0..1], std.builtin.Endian.little));
+
+    s = Serializer.init(&bytes);
+    const array = [2]Str2{ Str2{ .a = 100, .b = .{ .a = 1024, .b = -101.101 } }, Str2{ .a = 100, .b = .{ .a = 1024, .b = -101.101 } } };
+    s.write([]const Str2, array[0..]);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    try std.testing.expect(2 == std.mem.readInt(u32, bytes[0..4], std.builtin.Endian.little));
+    try std.testing.expect(100 == std.mem.readInt(u8, bytes[4..5], std.builtin.Endian.little));
+}
+pub const Serializer = struct {
+    const Self = @This();
+    index: usize,
+    into: []u8,
+
+    pub fn init(into: []u8) Self {
+        return .{ .index = 0, .into = into };
+    }
+
+    fn writeInt(self: *Self, comptime T: type, value: T, info: std.builtin.Type.Int) void {
+        var bytes: usize = info.bits / 8 + 1;
+        if (info.bits % 8 == 0) {
+            bytes = info.bits / 8;
+        }
+        @memcpy(self.into[self.index .. self.index + bytes], std.mem.asBytes(&std.mem.nativeToLittle(T, value)));
+        self.index += bytes;
+    }
+
+    fn writeFloat(self: *Self, comptime T: type, value: T, info: std.builtin.Type.Float) void {
+        var bytes: usize = info.bits / 8 + 1;
+        if (info.bits % 8 == 0) {
+            bytes = info.bits / 8;
+        }
+        @memcpy(self.into[self.index .. self.index + bytes], std.mem.asBytes(&std.mem.nativeToLittle(T, value)));
+        self.index += bytes;
+    }
+
+    fn writeEnum(self: *Self, comptime T: type, value: T, info: std.builtin.Type.Enum) void {
+        switch (@typeInfo(info.tag_type)) {
+            .Int => |tag_info| {
+                var bytes: usize = tag_info.bits / 8 + 1;
+                if (tag_info.bits % 8 == 0) {
+                    bytes = tag_info.bits / 8;
+                }
+                @memcpy(self.into[self.index .. self.index + bytes], std.mem.asBytes(&std.mem.nativeToLittle(info.tag_type, @intFromEnum(value))));
+                self.index += bytes;
+            },
+            else => @compileError("unsupported type"),
+        }
+    }
+
+    fn writeStruct(self: *Self, comptime T: type, obj: T) void {
+        const fields = std.meta.fields(T);
+        inline for (fields) |field| {
+            self.write(field.type, @field(obj, field.name));
+        }
+    }
+
+    fn writeArray(self: *Self, comptime T: type, arr: T, info: std.builtin.Type.Array) void {
+        for (arr) |item| {
+            self.write(info.child, item);
+        }
+    }
+
+    pub fn write(self: *Self, comptime T: type, value: T) void {
+        switch (@typeInfo(T)) {
+            .Int => |info| self.writeInt(T, value, info),
+            .Float => |info| self.writeFloat(T, value, info),
+            .Enum => |info| self.writeEnum(T, value, info),
+            .Struct => self.writeStruct(T, value),
+            .Array => |info| self.writeArray(T, value, info),
+            .Pointer => |ptr| {
+                switch (ptr.size) {
+                    // TODO: make this work for more than just slices of structs
+                    .Slice => {
+                        std.mem.writeInt(u32, @ptrCast(self.into[self.index .. self.index + 4]), @intCast(value.len), std.builtin.Endian.little);
+                        self.index += 4;
+                        for (value) |item| {
+                            self.write(ptr.child, item);
+                        }
+                    },
+                    else => @compileError("unsupported pointer serializtion attempt"),
+                }
+            },
+            else => @compileError("unsupported type"),
+        }
+    }
+};
+
+test Deserializer {
+    const size = 16 + 4 + (4 * 2 * 3);
+    var bytes: [size]u8 = [_]u8{0} ** size;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // int
+    var s = Serializer.init(&bytes);
+    s.write(u16, 123);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    var d = Deserializer.init(allocator, &bytes);
+    try std.testing.expect(123 == try d.read(u16));
+
+    // float
+    s = Serializer.init(&bytes);
+    s.write(f32, 123.123);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    d = Deserializer.init(allocator, &bytes);
+    try std.testing.expect(123.123 == try d.read(f32));
+
+    // enum
+    const En = enum(u2) { zero, one, two, three };
+    s = Serializer.init(&bytes);
+    s.write(En, En.one);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    d = Deserializer.init(allocator, &bytes);
+    try std.testing.expect(En.one == try d.read(En));
+
+    // struct
+    const Str = struct { a: i32, b: f64 };
+    s = Serializer.init(&bytes);
+    const example = Str{ .a = -1, .b = 0.5 };
+    s.write(Str, example);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    d = Deserializer.init(allocator, &bytes);
+    const result = try d.read(Str);
+    try std.testing.expect(example.a == result.a);
+    try std.testing.expect(example.b == result.b);
+
+    // slice
+    s = Serializer.init(&bytes);
+    const array = [2]Str{ Str{ .a = 100, .b = -101.101 }, Str{ .a = 100, .b = -101.101 } };
+    s.write([]const Str, array[0..]);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    d = Deserializer.init(allocator, &bytes);
+    const slice_result = try d.read([]const Str);
+    try std.testing.expect(slice_result.len == array.len);
+    try std.testing.expect(slice_result[0].a == array[0].a);
+    try std.testing.expect(slice_result[0].b == array[0].b);
+}
+test "Serialize and Deserialize a Room" {
+    var bytes: [1024]u8 = [_]u8{0} ** 1024;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var tiles: [4]Tile = [_]Tile{
+        .{
+            .parent_id = 100,
+            .index = 0,
+            .terrain = Terrain.dirt,
+        },
+        .{
+            .parent_id = 100,
+            .index = 1,
+            .terrain = Terrain.dirt,
+        },
+        .{
+            .parent_id = 100,
+            .index = 2,
+            .terrain = Terrain.dirt,
+        },
+        .{
+            .parent_id = 100,
+            .index = 3,
+            .terrain = Terrain.dirt,
+        },
+    };
+    _ = &tiles;
+    const test_room = Room{
+        .id = 100,
+        .tiles = tiles[0..],
+        .height = 2,
+        .width = 2,
+    };
+    std.debug.print("test_room now {}\n", .{test_room});
+
+    // actual test
+    var s = Serializer.init(&bytes);
+    s.write(Room, test_room);
+    std.debug.print("bytes now {any}\n", .{bytes[0..s.index]});
+    var d = Deserializer.init(allocator, &bytes);
+    const result = try d.read(Room);
+    std.debug.print("result room now {}\n", .{result});
+    try std.testing.expect(result.id == test_room.id);
+    try std.testing.expect(result.height == test_room.height);
+    try std.testing.expect(result.height == test_room.height);
+    try std.testing.expect(result.tiles[0].terrain == test_room.tiles[0].terrain);
+    try std.testing.expect(result.tiles[0].parent_id == test_room.id);
+    std.debug.print("tiles.len {d}\n", .{result.tiles.len});
+    try std.testing.expect(result.tiles.len == test_room.tiles.len);
+}
+/// warning: this will leak memory if you don't free the slices it produces.
+/// i.e. when Deserializing a struct { a: []u8 } into `const val`, you will need to call `allocator.free(val.a)`
+pub const Deserializer = struct {
+    const Self = @This();
+    index: usize,
+    from: []u8,
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator, from: []u8) Self {
+        return .{
+            .index = 0,
+            .from = from,
+            .allocator = allocator,
+        };
+    }
+
+    fn readInt(self: *Self, comptime T: type, info: std.builtin.Type.Int) T {
+        var bytes: usize = info.bits / 8 + 1;
+        if (info.bits % 8 == 0) {
+            bytes = info.bits / 8;
+        }
+        const result = std.mem.readInt(T, @ptrCast(self.from[self.index .. self.index + bytes]), std.builtin.Endian.little);
+        self.index += bytes;
+        return result;
+    }
+
+    fn readFloat(self: *Self, comptime T: type, info: std.builtin.Type.Float) T {
+        var bytes: usize = info.bits / 8 + 1;
+        if (info.bits % 8 == 0) {
+            bytes = info.bits / 8;
+        }
+        const result = std.mem.littleToNative(T, std.mem.bytesToValue(T, self.from[self.index .. self.index + bytes]));
+        self.index += bytes;
+        return result;
+    }
+
+    fn readEnum(self: *Self, comptime T: type, info: std.builtin.Type.Enum) T {
+        switch (@typeInfo(info.tag_type)) {
+            .Int => |tag_info| {
+                var bytes: usize = tag_info.bits / 8 + 1;
+                if (tag_info.bits % 8 == 0) {
+                    bytes = tag_info.bits / 8;
+                }
+                const result: T = @enumFromInt(std.mem.littleToNative(info.tag_type, std.mem.bytesToValue(info.tag_type, self.from[self.index .. self.index + bytes])));
+                self.index += bytes;
+                return result;
+            },
+            else => @compileError("unsupported type"),
+        }
+    }
+
+    fn readStruct(self: *Self, comptime T: type) !T {
+        const fields = std.meta.fields(T);
+        var item: T = undefined;
+        inline for (fields) |field| {
+            @field(item, field.name) = try self.read(field.type);
+        }
+        return item;
+    }
+
+    fn readArray(self: *Self, comptime T: type, info: std.builtin.Type.Array) !T {
+        var arr: T = undefined;
+        var i: usize = 0;
+        while (i < info.len) : (i += 1) {
+            arr[i] = try self.read(info.child);
+        }
+        return arr;
+    }
+
+    pub fn read(self: *Self, comptime T: type) !T {
+        return switch (@typeInfo(T)) {
+            .Int => |info| self.readInt(T, info),
+            .Float => |info| self.readFloat(T, info),
+            .Enum => |info| self.readEnum(T, info),
+            .Struct => try self.readStruct(T),
+            .Array => |info| try self.readArray(T, info),
+            .Pointer => |ptr| {
+                switch (ptr.size) {
+                    .Slice => {
+                        const len: usize = @intCast(std.mem.readInt(u32, @ptrCast(self.from[self.index .. self.index + 4]), std.builtin.Endian.little));
+                        self.index += 4;
+                        var slice = try self.allocator.alloc(ptr.child, len);
+                        var i: usize = 0;
+                        while (i < len) : (i += 1) {
+                            slice[i] = try self.read(ptr.child);
+                        }
+                        return slice;
+                    },
+                    else => @compileError("unsupported pointer serializtion attempt"),
+                }
+            },
+            else => @compileError("unsupported type"),
+        };
+    }
 };

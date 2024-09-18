@@ -6,6 +6,7 @@ const types = @import("types.zig");
 const c = types.c;
 const Entity = types.Entity;
 const ClientState = types.ClientState;
+const ArrayList = std.array_list.ArrayList;
 
 pub fn pollInput(event: *c.SDL_Event, state: *ClientState) !void {
     const current_input = state.currentInput();
@@ -14,7 +15,6 @@ pub fn pollInput(event: *c.SDL_Event, state: *ClientState) !void {
             state.should_quit = true;
         },
         c.SDL_KEYDOWN => {
-            std.debug.print("{any}\n", .{event.key});
             current_input.*.controllers[0].key = event.key.keysym.sym;
 
             switch (event.key.keysym.sym) {
@@ -81,6 +81,10 @@ pub fn initClientState(allocator: std.mem.Allocator, server_state: lib.Room, ren
             .texture = player_texture,
         },
     };
+    state.outgoing_requests = [_]?lib.Packet{null} ** types.MAX_QUEUED_REQUESTS;
+    state.incoming_response = null;
+    state.response_mutex = std.Thread.Mutex{};
+    state.response_condition = std.Thread.Condition{};
     return state;
 }
 
@@ -101,29 +105,50 @@ pub fn makeTextTexture(font: *c.TTF_Font, font_color: c.SDL_Color, renderer: *c.
     };
 }
 
-pub fn update(state: *ClientState) !void {
+pub fn update(allocator: std.mem.Allocator, state: *ClientState) !void {
     // cleanup/prep for next frame
     defer clearControllerInputs(state);
     defer state.frame += 1;
+    defer std.debug.print("frame: {d}", .{state.frame});
 
     const current_input = state.currentInput();
 
     if (state.making_new_character) {
+        if (state.waiting_on_character_create_response) {
+            std.debug.print("checking incoming_response\n", .{});
+            var handled: bool = false;
+            state.response_mutex.lock();
+            if (state.incoming_response) |*res| {
+                if (res.msg == Message.no_character_slots_left) {
+                    // TODO: show error message saying that the server is full
+                    state.incoming_response = null;
+                    state.response_condition.signal();
+                    handled = true;
+                } else if (res.msg == Message.character_created) {
+                    state.making_new_character = false;
+                    state.waiting_on_character_create_response = false;
+                    var reader = lib.Deserializer.init(allocator, res.data[0..]);
+                    const character = try reader.read(Character);
+                    //defer allocator.free( any slices in the character struct );
+                    const char_id: usize = @intCast(character.id);
+                    state.world.characters[char_id] = character;
+                    state.player.character_id = character.id;
+                    std.debug.print("me: {any}\n", .{state.world.characters[char_id].?});
+                    state.incoming_response = null;
+                    state.response_condition.signal();
+                    handled = true;
+                }
+            }
+            state.response_mutex.unlock();
+            if (handled) {
+                return;
+            }
+        }
+
         // currently 'start' is only meaningful in the context of making a character
         if (current_input.controllers[0].start) {
-            const character_response = try lib.request_response(.{ .msg = Message.create_character, .data = &state.input_username }, state.sock, &state.server_address);
-            std.debug.print("server character create response:\n{any}\n", .{character_response});
-            if (character_response.msg == Message.no_character_slots_left) {
-                // TODO: show error message saying that the server is full
-            } else {
-                std.debug.assert(character_response.msg == Message.character_created);
-                state.making_new_character = false;
-                const temp_char = Character.fromBytes(character_response.data[0..]);
-                const char_id: usize = @intCast(temp_char.id);
-                state.world.characters[char_id] = temp_char;
-                state.player.character_id = temp_char.id;
-                std.debug.print("me: {any}\n", .{state.world.characters[char_id].?});
-            }
+            state.addRequest(.{ .msg = Message.create_character, .data = &state.input_username });
+            state.waiting_on_character_create_response = true;
         }
 
         if (state.input_username[0] != 0 and current_input.controllers[0].back) {
@@ -142,6 +167,22 @@ pub fn update(state: *ClientState) !void {
     }
 
     // TODO: rollback/update state based on server snapshots. Gotta figure out how to read server snapshots
+    state.response_mutex.lock();
+    if (state.incoming_response) |*res| {
+        if (res.msg == Message.snapshot) {
+            var reader = lib.Deserializer.init(allocator, res.data[0..]);
+            const snapshot = try reader.read(lib.Snapshot);
+            allocator.free(state.world.room.tiles);
+            state.world.room = snapshot.room;
+            for (snapshot.characters, 0..) |char, i| {
+                state.world.characters[i] = char;
+            }
+            allocator.free(snapshot.characters);
+            state.incoming_response = null;
+            state.response_condition.signal();
+        }
+    }
+    state.response_mutex.unlock();
 
     var tried_to_change_world: bool = false;
     const player: *Entity = &state.player;
@@ -151,14 +192,16 @@ pub fn update(state: *ClientState) !void {
 
     // TODO: if the current_input is one that needs to be sent to the server, send it. This happens when our own prediction of the new state.world *might* be different. "Might be" because we can't assume that e.g. players blocking our path are actually still in the way. So essentially, if we had a user input state that was "trying" to affect the `state.world`, whether or not it actually did affect it (according to our simulation) we still need to send that input.
     if (tried_to_change_world) {
-        const input_bytes = current_input.controllers[0].toBytes();
-        var buffer: [20]u8 = undefined;
-        @memcpy(buffer[0..input_bytes.len], input_bytes[0..]);
-        var id_buffer: [4]u8 = undefined;
-        std.mem.writeInt(u32, &id_buffer, player.character_id, std.builtin.Endian.little);
-        @memcpy(buffer[input_bytes.len..], id_buffer[0..]);
-        std.debug.print("tried_to_change_world sending {any}\n", .{buffer});
-        _ = try lib.request(.{ .msg = Message.move, .data = &buffer }, state.sock, &state.server_address);
+        var buffer: [32]u8 = undefined;
+        var serializer = lib.Serializer.init(&buffer);
+        serializer.write(lib.MoveCommand, .{
+            .character_id = player.character_id,
+            .point = current_input.controllers[0].direction,
+        });
+        std.debug.print("tried_to_change_world sending {any}\n", .{buffer[0..serializer.index]});
+        var packet = lib.Packet.init(allocator, Message.move, &.{});
+        try packet.addData(buffer[0..serializer.index]);
+        state.addRequest(packet);
     }
 }
 
@@ -210,7 +253,7 @@ pub fn render(renderer: *c.SDL_Renderer, state: *ClientState) !void {
     var dest: c.SDL_Rect = undefined;
     dest.w = types.TILE_SIZE;
     dest.h = types.TILE_SIZE;
-    for (&state.world.room.tiles, 0..) |*tile, i| {
+    for (state.world.room.tiles, 0..) |*tile, i| {
         if (tile.terrain == lib.Terrain.blank) {
             continue;
         }
